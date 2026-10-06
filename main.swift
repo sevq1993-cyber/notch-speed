@@ -508,8 +508,9 @@ final class Permissions {
             guard let ts = (rec["timestamp"] as? String).flatMap(Self.iso.date(from:)),
                   ts.timeIntervalSince1970 >= since else { break }
             for b in blocks.reversed() where b["type"] as? String == "tool_use" && b["name"] as? String == tool {
+                // the same field permission-hook.py's summary() shows; other tools (MCP) match by name alone
                 let input = b["input"] as? [String: Any] ?? [:]
-                let keys = ["command", "file_path", "notebook_path", "url", "pattern", "path"]
+                let keys = tool == "Bash" ? ["command"] : ["file_path", "notebook_path", "url", "pattern", "path"]
                 let text = keys.lazy.compactMap { input[$0].map { "\($0)" } }.first
                 if text == nil || text == want {
                     id = b["id"] as? String
