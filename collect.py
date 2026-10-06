@@ -17,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from urllib.parse import quote
 
@@ -31,7 +32,8 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = os.path.expanduser("~/.claude/projects")
 SCAN_WINDOW = 2 * 3600  # 下拉列出近 2 小时内有写入的会话
 TITLE_WINDOW = 10 * 60  # 最新响应超过 10 分钟,标题速度位显示为闲置
-MAX_SESSIONS = 4        # 下拉最多列几个会话(全部数据源合并后取最活跃的)
+HIST_LEN = 8            # responses in the notch card's mini speed history
+MAX_SESSIONS = 4        # sessions shown per source (most recently active first)
 TAIL_BYTES = 400_000
 CODEX_ROOT = os.path.expanduser("~/.codex/sessions")  # Codex CLI 会话目录
 # Kimi Code 会话目录(数据根可用 KIMI_CODE_HOME 重定位,见官方 data-locations 文档)
@@ -61,7 +63,7 @@ REMOTES = [c.strip() for c in
            if c.strip()]
 REMOTE_TIMEOUT = 8   # 远端采集超时(秒);超时/失败该远端静默为空
 OPENCODE_MAX_MESSAGES = 200  # 每个近期会话只读最新 N 条 message metadata
-OPENCODE_MAX_SESSIONS = 64   # 含 parent/child；防异常库拖慢 3s 刷新
+OPENCODE_MAX_SESSIONS = 64   # parent and child sessions; caps a pathological DB
 
 # 速度拆分参数(见 fit_speed,与 statusline-speed.py 完全一致)
 MAX_SEC_PER_TOK = 0.5   # dur/out>0.5s(<2tok/s)的组基本掺了「发消息前的停顿」,剔除
@@ -74,7 +76,6 @@ WAIT_MIN = 3            # 最后记录是 user 且距今超过此秒数 → 正�
 WAIT_MAX = 120          # 等待超过此秒数视为请求已被中断,不再显示 ⏳
 ERR_TITLE_WINDOW = 300  # 最新会话近 5 分钟内有 API 错误 → 标题挂 ⚠️
 ERR_ROW_WINDOW = 1800   # 下拉行统计近 30 分钟的 API 错误数
-CACHE_OK = 0.9          # 缓存命中率颜色阈值(statusline 绿档)
 AGENT_ACTIVE_WINDOW = 90   # 子代理文件在此窗口内有写入 → 视为活跃(在跑)
 AGENT_BURN_WINDOW = 120    # 后台吞吐统计窗口:近 N 秒产出 token 之和 / N
 AGENT_MAX_READ = 8         # 每轮最多读几个子代理文件(控 IO,其余只计数)
@@ -124,7 +125,8 @@ def response_groups(lines):
             if mdl == "<synthetic>" or r.get("isApiErrorMessage"):
                 if ts:
                     last_ts = ts
-                    err_ts.append(ts)
+                    if r.get("isApiErrorMessage"):
+                        err_ts.append(ts)
                 continue
             if cur and cur["id"] == mid:
                 cur["end"] = ts or cur["end"]
@@ -161,8 +163,18 @@ def last_record_info(lines):
             continue
         ts = parse_ts(r.get("timestamp"))
         if ts and r.get("type") in ("user", "assistant"):
+            if r.get("type") == "user" and is_interrupt(r):
+                return "interrupt", ts  # the turn was stopped, nothing is pending
             return r.get("type"), ts
     return None, None
+
+
+def is_interrupt(r):
+    c = (r.get("message") or {}).get("content")
+    if isinstance(c, str):
+        return c.startswith("[Request interrupted")
+    return any(isinstance(b, dict) and str(b.get("text", "")).startswith("[Request interrupted")
+               for b in (c or []))
 
 
 def current_model_groups(groups):
@@ -473,6 +485,200 @@ def codex_recent_files():
             found.append((mt, p))
     found.sort(reverse=True)
     return found[:MAX_SESSIONS]
+
+
+# ---- deep links: a click on a notch row opens that chat in its app ----
+
+DESKTOP_SESSIONS = os.path.expanduser("~/Library/Application Support/Claude/claude-code-sessions")
+
+
+def desktop_session_ids():
+    """Claude desktop's own session id per Claude Code transcript id; both lead each session file."""
+    out = {}
+    for p in glob.glob(os.path.join(DESKTOP_SESSIONS, "*", "*", "local_*.json")):
+        try:
+            with open(p, "rb") as fh:
+                head = fh.read(2048).decode("utf-8", "replace")
+        except OSError:
+            continue
+        local = re.search(r'"sessionId"\s*:\s*"(local_[^"]+)"', head)
+        cli = re.search(r'"cliSessionId"\s*:\s*"([^"]+)"', head)
+        if local and cli:
+            out[cli.group(1)] = local.group(1)
+    return out
+
+
+def open_url(src, sid, desktop):
+    """codex://threads/<id> for Codex; Claude only for sessions the desktop app owns (CLI ones have no link)."""
+    if not sid:
+        return None
+    if src == "codex":
+        return "codex://threads/" + sid
+    if src == "claude" and sid in desktop:
+        return "claude://code/continue?session=" + desktop[sid]
+    return None
+
+
+# ---- subscription limits (5-hour / weekly windows) ----
+
+LIMITS_CACHE = os.path.expanduser("~/.cache/claude-speed/claude-limits.json")  # written by statusline-speed.py
+
+
+def limit_entry(name, pct, resets_at, now):
+    """One window for the notch: drops windows whose reset already passed (the number is stale then)."""
+    if pct is None or (resets_at and resets_at <= now):
+        return None
+    left = int(resets_at - now) if resets_at else None
+    if left is None:
+        reset = ""
+    elif left >= 86400:
+        reset = "%dд %dч" % (left // 86400, left % 86400 // 3600)
+    elif left >= 3600:
+        reset = "%dч %dм" % (left // 3600, left % 3600 // 60)
+    else:
+        reset = "%dм" % max(1, left // 60)
+    return {"name": name, "pct": round(float(pct)), "reset": reset}
+
+
+def window_name(minutes):
+    return "5ч" if minutes and minutes <= 6 * 60 else "нед"
+
+
+def codex_limits(now):
+    """Latest rate_limits of the main "codex" bucket, logged with every token_count event.
+
+    Only the newest day folders are listed (paths sort by date), so the scan doesn't grow with history.
+    Model-specific buckets (e.g. "codex_bengalfox") and null entries are skipped.
+    """
+    files = []
+    for day in sorted(glob.glob(os.path.join(CODEX_ROOT, "*", "*", "*")))[-3:]:
+        for p in glob.glob(os.path.join(day, "rollout-*.jsonl")):
+            try:
+                files.append((os.path.getmtime(p), p))
+            except OSError:
+                pass
+    for _, path in sorted(files, reverse=True)[:3]:
+        for line in reversed(tail_lines(path)):
+            if '"rate_limits":{' not in line.replace(" ", ""):
+                continue
+            try:
+                rl = (json.loads(line).get("payload") or {}).get("rate_limits")
+            except ValueError:
+                continue
+            if not isinstance(rl, dict) or rl.get("limit_id", "codex") != "codex":
+                continue
+            out = []
+            for key in ("secondary", "primary"):
+                w = rl.get(key) or {}
+                e = limit_entry(window_name(w.get("window_minutes")), w.get("used_percent"), w.get("resets_at"), now)
+                if e:
+                    out.append(e)
+            out.sort(key=lambda e: e["name"] != "5ч")  # 5-hour first, then weekly
+            return out
+    return []
+
+
+USAGE_CACHE = os.path.expanduser("~/.cache/claude-speed/claude-usage.json")  # usage numbers only, never the token
+USAGE_TTL = 300        # ask the usage endpoint at most every 5 minutes
+USAGE_RETRY = 60       # after a failed (or still running) fetch
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"  # what /usage shows; undocumented, may change
+
+
+def iso_epoch(v):
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def fetch_claude_usage(now):
+    """5-hour / weekly utilization with Claude Code's own OAuth token (read from the Keychain, used once, never stored).
+
+    The token is never refreshed here: rotating it would sign Claude Code out. An expired token just means
+    waiting until Claude Code refreshes it.
+    """
+    try:
+        raw = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                             capture_output=True, text=True, timeout=5)
+        oauth = json.loads(raw.stdout).get("claudeAiOauth") or {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    token = oauth.get("accessToken")
+    if not token or (oauth.get("expiresAt") or 0) / 1000 <= now:
+        return None
+    req = urllib.request.Request(USAGE_URL, headers={
+        "Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-speed"})
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            d = json.load(r)
+    except (OSError, ValueError):
+        return None
+    return {k: {"used_percentage": (d.get(k) or {}).get("utilization"),
+                "resets_at": iso_epoch((d.get(k) or {}).get("resets_at"))}
+            for k in ("five_hour", "seven_day") if d.get(k)}
+
+
+def read_usage_cache():
+    try:
+        with open(USAGE_CACHE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_usage_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(USAGE_CACHE), exist_ok=True)
+        with open(USAGE_CACHE + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump(cache, fh)
+        os.replace(USAGE_CACHE + ".tmp", USAGE_CACHE)
+    except OSError:
+        pass
+
+
+def claude_usage(now):
+    """Cached usage-endpoint numbers. A stale cache is refreshed by a detached child process,
+    so the Keychain read and the HTTP call never block the poll."""
+    cache = read_usage_cache()
+    if (now - (cache.get("fetched_at") or 0) >= USAGE_TTL
+            and now - (cache.get("attempt_at") or 0) >= USAGE_RETRY):
+        cache["attempt_at"] = now  # one fetch at a time; a failed one is retried after USAGE_RETRY
+        write_usage_cache(cache)
+        try:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "--fetch-usage"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
+    return cache.get("limits")
+
+
+def refresh_claude_usage(now):
+    """--fetch-usage: only a successful fetch moves fetched_at, so a failure doesn't wait out the TTL."""
+    fresh = fetch_claude_usage(now)
+    if fresh is None:
+        return
+    cache = read_usage_cache()
+    cache.update(fetched_at=now, limits=fresh)
+    write_usage_cache(cache)
+
+
+def claude_limits(now):
+    """Claude subscription windows: the usage endpoint, else what the status line last cached."""
+    rl = claude_usage(now)
+    if not rl:
+        try:
+            with open(LIMITS_CACHE, encoding="utf-8") as fh:
+                rl = json.load(fh)
+        except (OSError, ValueError):
+            return []
+    out = []
+    for key, name in (("five_hour", "5ч"), ("seven_day", "нед")):
+        w = rl.get(key) or {}
+        e = limit_entry(name, w.get("used_percentage"), w.get("resets_at"), now)
+        if e:
+            out.append(e)
+    return out
 
 
 # ---- Kimi Code 数据源(仅 collect;wire.jsonl 是未文档化内部格式,解析须防御) ----
@@ -925,7 +1131,7 @@ def opencode_recent_sessions(now=None):
 
 
 def fmt_ago(sec):
-    return "%d分" % (sec // 60) if sec >= 60 else "%d秒" % sec
+    return "%dм" % (sec // 60) if sec >= 60 else "%dс" % sec
 
 
 def lamp(tps):
@@ -934,13 +1140,17 @@ def lamp(tps):
     return "🟢" if tps >= 50 else ("🟡" if tps >= 30 else "🔴")
 
 
-def collect_rows(now):
-    """扫描全部本机数据源 → 已拟合的会话行列表(按最近响应时间倒序,未截断)。"""
+def collect_rows(now, sources=None):
+    """Scan every local source → fitted session rows, newest response first.
+
+    sources limits the scan to those providers (the notch app only shows claude/codex).
+    """
+    want = lambda src: sources is None or src in sources
 
     # ---- 扫描:每会话解析一次尾部,同时汇集跨会话共享斜率的点池 ----
     sessions = []
     pool = {}  # model -> [(out,dur)]:TPS 是模型属性,跨会话同构,可共享斜率
-    for mtime, path, dname, agent_paths in recent_files():
+    for mtime, path, dname, agent_paths in (recent_files() if want("claude") else []):
         lines = tail_lines(path)
         groups, err_ts = response_groups(lines)
         ltype, lts = last_record_info(lines)
@@ -962,12 +1172,22 @@ def collect_rows(now):
         for mdl, out, d in apts:  # 子代理响应与主链同构,并入同模型点池
             pool.setdefault(mdl, []).append((out, d))
         sessions.append({"mtime": mtime, "label": project_label(dname),
-                         "groups": groups, "err_ts": err_ts, "wait": wait,
-                         "agents": (n_ag, burn)})
+                         "chat": claude_chat_title(lines),
+                         "project": "Без папки" if "scratch-workspaces" in dname else project_label(dname),
+                         "src": "claude", "groups": groups, "err_ts": err_ts, "wait": wait,
+                         "agents": (n_ag, burn), "sid": os.path.basename(path)[:-len(".jsonl")]})
 
     # ---- Codex 会话:解析出同构的组,下游流水线全部复用 ----
-    for mtime, path in codex_recent_files():
+    codex_titles = codex_thread_names() if want("codex") else {}
+    for mtime, path in (codex_recent_files() if want("codex") else []):
         groups, err_ts, label, trig_ts = codex_parse(tail_lines(path))
+        if not label or any(g["model"] == "codex" for g in groups):
+            head_label, head_model = codex_head(path)
+            label = label or head_label
+            if head_model:
+                for g in groups:
+                    if g["model"] == "codex":
+                        g["model"] = head_model
         wait = None
         if trig_ts and WAIT_MIN < now - trig_ts <= WAIT_MAX:
             wait = int(now - trig_ts)
@@ -980,12 +1200,14 @@ def collect_rows(now):
             if plausible_point(g["out"], d):
                 pool.setdefault(g.get("model"), []).append((g["out"], d))
         sessions.append({"mtime": mtime, "label": (label or "codex")[:16],
-                         "groups": groups, "err_ts": err_ts, "wait": wait,
-                         "agents": (0, 0.0)})
+                         "chat": codex_chat_title(path, codex_titles),
+                         "project": label or "",
+                         "src": "codex", "groups": groups, "err_ts": err_ts, "wait": wait,
+                         "agents": (0, 0.0), "sid": os.path.basename(path)[:-len(".jsonl")][-36:]})
 
     # ---- Kimi Code 会话:wire.jsonl 解析出同构的组,下游流水线全部复用 ----
-    klabels = kimi_session_labels()
-    for eff, path, sdir, agent_paths in kimi_recent_files():
+    klabels = kimi_session_labels() if want("kimi") else {}
+    for eff, path, sdir, agent_paths in (kimi_recent_files() if want("kimi") else []):
         groups, err_ts, trig_ts = kimi_parse(tail_lines(path))
         wait = None
         if trig_ts and WAIT_MIN < now - trig_ts <= WAIT_MAX:
@@ -1006,11 +1228,11 @@ def collect_rows(now):
         sessions.append({"mtime": eff,
                          "label": (klabels.get(sdir)
                                    or kimi_label_fallback(sdir))[:16],
-                         "groups": groups, "err_ts": err_ts, "wait": wait,
+                         "src": "kimi", "groups": groups, "err_ts": err_ts, "wait": wait,
                          "agents": (n_ag, burn)})
 
     # ---- OpenCode Desktop/CLI:二者共用 SQLite；root 会话与 parent_id 子代理聚合 ----
-    for oc in opencode_recent_sessions(now):
+    for oc in (opencode_recent_sessions(now) if want("opencode") else []):
         groups, err_ts = oc["groups"], oc["err_ts"]
         n_ag, burn = oc["agents"]
         has_recent = bool(groups) and now - groups[-1]["end"] < SCAN_WINDOW
@@ -1024,12 +1246,18 @@ def collect_rows(now):
         for mdl, out, d in oc.get("agent_points", []):
             pool.setdefault(mdl, []).append((out, d))
         sessions.append({"mtime": oc["mtime"], "label": oc["label"],
-                         "groups": groups, "err_ts": err_ts,
+                         "src": "opencode", "groups": groups, "err_ts": err_ts,
                          "wait": oc["wait"], "agents": (n_ag, burn)})
 
-    # 多源合并后按活跃时间取最活跃的 MAX_SESSIONS 个
+    # the most recently active sessions: MAX_SESSIONS in all, or per source for the split notch view
     sessions.sort(key=lambda s: s["mtime"], reverse=True)
-    sessions = sessions[:MAX_SESSIONS]
+    if sources is None:
+        sessions = sessions[:MAX_SESSIONS]
+    else:
+        per_src = {}
+        sessions = [s for s in sessions
+                    if per_src.setdefault(s["src"], []).append(s) or
+                    len(per_src[s["src"]]) <= MAX_SESSIONS]
 
     # ---- 每会话拟合:自身滑窗拟合 → 全局斜率+会话截距(两阶段) → 下界近似 ----
     rows = []
@@ -1038,8 +1266,9 @@ def collect_rows(now):
         if not groups:  # 主链还没有成功响应:只有等待/错误/后台代理信息
             rows.append({"end": s["mtime"], "mtime": s["mtime"], "fit": None,
                          "glob": False, "win": None, "wait": s["wait"],
-                         "err_ts": s["err_ts"], "label": s["label"],
-                         "model": "", "last": None, "agents": s["agents"]})
+                         "err_ts": s["err_ts"], "label": s["label"], "src": s["src"],
+                         "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"),
+                         "model": "", "last": None, "agents": s["agents"], "hist": []})
             continue
         g = groups[-1]
         mg = current_model_groups(groups)
@@ -1052,9 +1281,19 @@ def collect_rows(now):
             if b is not None and len(pts) >= 2:
                 fit = (1.0 / b, max(0.0, median([y - b * x for x, y in pts])))
                 win, borrowed = None, True
-        rows.append({"end": g["end"], "mtime": s["mtime"], "fit": fit,
+        # per-response speeds for the mini history, oldest first: output over (duration − TTFT);
+        # when TTFT eats most of a short response the net time is noise, so end-to-end is used
+        ttft = fit[1] if fit and fit[1] is not None else 0.0
+        hist = []
+        for x in mg[-HIST_LEN:]:
+            d = x["end"] - x["start"]
+            if plausible_point(x["out"], d):
+                net = d - ttft
+                hist.append(min(MAX_TPS, x["out"] / (net if net >= max(0.5, 0.3 * d) else d)))
+        rows.append({"end": g["end"], "mtime": s["mtime"], "fit": fit, "hist": hist,
                      "glob": borrowed, "win": win, "wait": s["wait"],
-                     "err_ts": s["err_ts"], "label": s["label"],
+                     "err_ts": s["err_ts"], "label": s["label"], "src": s["src"],
+                     "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"),
                      "model": model_tag(g.get("model")), "last": g,
                      "agents": s["agents"]})
     rows.sort(key=lambda r: r["end"], reverse=True)
@@ -1099,6 +1338,7 @@ def rows_from_json(text, now):
             d.setdefault("win", None)
             d.setdefault("glob", False)
             d.setdefault("model", "")
+            d.setdefault("src", "")
             out.append(d)
         except (ValueError, KeyError, TypeError):
             continue
@@ -1120,33 +1360,172 @@ def remote_rows(now, commands=None):
     return rows
 
 
-def render(rows, now):
-    """行 → 菜单栏协议文本:第 1 行标题,其余下拉明细。"""
-    rows = sorted(rows, key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
+ACTIVE_WINDOW = 15
 
-    # ---- 标题:⚠️(近期错误)+ 速度灯 + 🤖(后台舰队) ----
-    # 等待/高首字的 ⏳ 只进下拉,不占图标栏(用户偏好:标题保持最简)
+
+def claude_chat_title(lines):
+    """Latest chat title in a Claude Code transcript: custom-title wins, then summary."""
+    for line in reversed(lines):
+        if '"custom-title"' not in line and '"summary"' not in line:
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("type") == "custom-title" and r.get("customTitle"):
+            return r["customTitle"]
+        if r.get("type") == "summary" and r.get("summary"):
+            return r["summary"]
+    return ""
+
+
+def codex_chat_title(path, titles):
+    """Thread name; a subagent rollout (<parent>_<child>.jsonl) borrows its parent's name."""
+    stem = os.path.basename(path)[:-len(".jsonl")]
+    title = titles.get(stem[-36:], "")
+    if not title and "_" in stem:
+        parent = titles.get(stem.rsplit("_", 1)[0][-36:], "")
+        if parent:
+            title = parent + " · агент"
+    return title
+
+
+def codex_thread_names():
+    """id → thread_name from ~/.codex/session_index.jsonl (later lines win; only the tail is read)."""
+    path = os.path.join(os.path.expanduser("~/.codex"), "session_index.jsonl")
+    out = {}
+    for line in tail_lines(path):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("id") and r.get("thread_name"):
+            out[r["id"]] = r["thread_name"]
+    return out
+
+
+def pretty_model(mid):
+    """'claude-opus-5-5'→'Opus 5.5', 'gpt-6-astra'→'GPT-6 Astra', 'gpt-6.1-sol'→'GPT-6.1 Sol'."""
+    mid = (mid or "").rsplit("/", 1)[-1]
+    parts = [p for p in mid.split("-") if p]
+    if parts and parts[0] == "claude":
+        parts = parts[1:]
+    if not parts:
+        return ""
+    if parts[0] == "gpt" and len(parts) > 1:
+        return " ".join(["GPT-" + parts[1]] + [p.capitalize() for p in parts[2:]])
+    name, nums, rest = parts[0].capitalize(), [], []
+    for p in parts[1:]:
+        (nums if p.isdigit() and not rest else rest).append(p)
+    return " ".join([name] + ([".".join(nums)] if nums else []) + [p.capitalize() for p in rest])
+
+
+def codex_head(path):
+    """(label, model) from the rollout head: session_meta.cwd and the first turn_context.
+
+    The tail read misses both on long sessions; without the model, groups fall into the
+    generic "codex" pool and borrow speeds from other models.
+    """
+    label, model = "", None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for _ in range(40):
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                p = r.get("payload") or {}
+                if r.get("type") == "session_meta" and p.get("cwd") and not label:
+                    label = os.path.basename(str(p["cwd"]).rstrip("/"))
+                elif r.get("type") == "turn_context" and p.get("model"):
+                    model = p["model"]
+                    break
+    except OSError:
+        pass
+    return label, model
+
+
+def title_text(rows, now):
+    """Status-bar title for a set of rows: ⚠️ + lamp+speed + 🤖N."""
     speed_seg = ""
     for r in rows:
         if r["fit"] is not None and now - r["end"] < TITLE_WINDOW:
             tps, ttft = r["fit"]
             if ttft is None:
-                # 回退近似是下界:下界过绿线才敢亮绿灯,否则亮 ⚪「不确定」
+                # a lower bound only earns green when it already clears the green line
                 speed_seg = "🟢≥%.0f" % tps if tps >= 50 else "⚪≥%.0f" % tps
             else:
                 speed_seg = "%s%s%.0f" % (lamp(tps), "≈" if r["glob"] else "", tps)
             break
     err_flag = "⚠️" if any(now - e <= ERR_TITLE_WINDOW
                            for r in rows for e in r["err_ts"]) else ""
-    # 舰队口径与 ⚠️ 一致:聚合所有在榜会话,避免「谁的 mtime 最新」的瞬时竞态
+    # fleet count aggregates every listed session, same as ⚠️
     n_ag = sum(r["agents"][0] for r in rows)
     burn = sum(r["agents"][1] for r in rows)
     if speed_seg:
-        print(err_flag + speed_seg + (" 🤖%d" % n_ag if n_ag else ""))
-    elif n_ag:  # 前台无读数、后台在烧:标题只显舰队状态
-        print(err_flag + "🤖%d Σ%.0f" % (n_ag, burn))
+        text = err_flag + speed_seg + (" 🤖%d" % n_ag if n_ag else "")
+    elif n_ag:
+        text = err_flag + "🤖%d Σ%.0f" % (n_ag, burn)
     else:
-        print(err_flag + "⚪" if err_flag else "⚪")
+        text = err_flag + "⚪"
+    return text
+
+
+def menu_json(rows, now, sources=("claude", "codex")):
+    """Per-provider titles and table rows for the split menu bar (one icon per provider)."""
+    out = {}
+    desktop = desktop_session_ids() if any(r.get("src") == "claude" for r in rows) else {}
+    for src in sources:
+        rs = sorted((r for r in rows if r.get("src") == src),
+                    key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
+        items = []
+        for r in rs:
+            fit, g = r["fit"], r["last"]
+            cache = cold = None
+            if g:
+                denom = g["inp"] + g["cr"] + g["cc"]
+                if denom > 0:
+                    cache = round(100 * g["cr"] / denom)
+                    cold = g["cc"] > g["cr"]
+            status = None
+            if fit is None:
+                if r["wait"] is not None:
+                    status = "ждёт первого ответа" if r["last"] is None else "ждёт ответа"
+                elif r["last"] is None and r["agents"][0]:
+                    status = "фоновые задачи"
+                elif r["last"] is None:
+                    status = "нет успешных ответов"
+                else:
+                    status = "мало данных"
+            items.append({
+                "label": r["label"], "model": r["model"],
+                "chat": r.get("chat", ""), "project": r.get("project") or r["label"],
+                "live": bool(r["wait"] is not None or r["agents"][0] or now - r["end"] < ACTIVE_WINDOW),  # still generating
+                "model_name": pretty_model(g.get("model")) if g else "",
+                "tps": round(fit[0]) if fit else None,
+                "approx": bool(r["glob"]), "lower": bool(fit and fit[1] is None),
+                "ttft": round(fit[1], 1) if fit and fit[1] is not None else None,
+                "cache": cache, "cold": cold, "wait": r["wait"],
+                "ago": fmt_ago(now - r["end"]) if g else None,
+                "errs": sum(1 for e in r["err_ts"] if now - e <= ERR_ROW_WINDOW),
+                "agents": r["agents"][0], "status": status,
+                "hist": [round(x) for x in r.get("hist", [])],
+                "open": open_url(src, r.get("sid"), desktop),
+            })
+        limits = claude_limits(now) if src == "claude" else codex_limits(now) if src == "codex" else []
+        out[src] = {"title": title_text(rs, now), "live": any(it["live"] for it in items), "rows": items,
+                    "limits": limits}
+    return json.dumps(out, ensure_ascii=False)
+
+
+def render(rows, now):
+    """Rows → text: the title line, then one detail line per row (CLI and the Windows tray ClaudeSpeed.ps1)."""
+    rows = sorted(rows, key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
+    # wait/slow-TTFT ⏳ goes to the detail lines only; the title stays minimal
+    print(title_text(rows, now))
 
     # ---- 下拉明细 ----
     for r in rows:
@@ -1156,22 +1535,22 @@ def render(rows, now):
         if fit is None:
             if r["wait"] is not None:
                 # 「首个」只对真·新会话(无任何历史响应)成立,否则与「最近Ntok」矛盾
-                segs.append("⏳ 等待%s响应 %d秒"
-                            % ("首个" if r["last"] is None else "", r["wait"]))
+                segs.append("⏳ жду %sответа %dс"
+                            % ("первого " if r["last"] is None else "", r["wait"]))
             elif r["last"] is None and r["agents"][0]:
-                segs.append("后台任务运行中")  # 主链无响应,速度看 🤖 段
+                segs.append("фоновые задачи")  # no main-chain response; speed lives in the 🤖 segment
             elif r["last"] is None:
-                segs.append("🔴 无成功响应")  # 全错会话:groups 空,靠 ⚠️N错 说明原因
+                segs.append("🔴 нет успешных ответов")  # all-error session: no groups, the ⚠️ segment explains why
             else:
-                segs.append("⚪ 速度样本不足")
+                segs.append("⚪ мало данных")
         elif fit[1] is None:
             lp = "🟢" if fit[0] >= 50 else "⚪"
             segs.append("%s ≥%.0f tok/s" % (lp, fit[0]))
         else:
-            seg = "%s %s%.0f tok/s 首字%.0fs" % (
+            seg = "%s %s%.0f tok/s TTFT %.0fs" % (
                 lamp(fit[0]), "≈" if r["glob"] else "", fit[0], fit[1])
             if r["win"] and r["win"] > FIT_WINDOW_START:
-                seg += "·近%d分" % round(r["win"] / 60)
+                seg += "·окно %dм" % round(r["win"] / 60)
             segs.append(seg)
         n_ag, burn = r["agents"]
         if n_ag:
@@ -1180,30 +1559,37 @@ def render(rows, now):
         if g:
             denom = g["inp"] + g["cr"] + g["cc"]
             if denom > 0:
-                seg = "缓存%d%%" % round(100 * g["cr"] / denom)
+                seg = "кэш %d%%" % round(100 * g["cr"] / denom)
                 if g["cc"] > g["cr"]:
-                    seg += "冷"
+                    seg += "❄"
                 segs.append(seg)
         nerr = sum(1 for e in r["err_ts"] if now - e <= ERR_ROW_WINDOW)
         if nerr:
-            segs.append("⚠️%d错" % nerr)
+            segs.append("⚠️%d ош." % nerr)
         if r["wait"] is not None and fit is not None:
-            segs.append("⏳等%d秒" % r["wait"])
+            segs.append("⏳ жду %dс" % r["wait"])
         if g:
-            segs.append("最近%dtok·%.0fs" % (g["out"], g["end"] - g["start"]))
-            segs.append("%s前" % fmt_ago(now - r["end"]))
+            segs.append("посл. %dtok·%.0fs" % (g["out"], g["end"] - g["start"]))
+            segs.append("%s назад" % fmt_ago(now - r["end"]))
         print("%s  %s" % (head, "  ".join(segs)))
     if not rows:
-        print("近2小时无响应")
+        print("нет ответов за 2 ч")
 
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     now = time.time()
-    rows = collect_rows(now)
+    if "--fetch-usage" in argv:
+        refresh_claude_usage(now)
+        return
+    menu = "--menu-json" in argv
+    rows = collect_rows(now, sources=("claude", "codex") if menu else None)
     if "--json" in argv:
         print(rows_to_json(rows, now))
+        return
+    if menu:  # the notch shows local claude/codex only; remote rows would be dropped
+        print(menu_json(rows, now))
         return
     if "--no-remote" not in argv:
         rows.extend(remote_rows(now))
