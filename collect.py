@@ -1474,10 +1474,124 @@ def title_text(rows, now):
     return text
 
 
+# ---- today's totals: output tokens and model responses since local midnight ----
+
+TODAY_CACHE = os.path.expanduser("~/.cache/claude-speed/today.json")
+TODAY_TTL = 30  # seconds between scans; each scan reads only what was appended since the last one
+
+
+def _today_claude(path, st, midnight):
+    """Assistant lines share message.id per response (one line per content block): count ids, max their output."""
+    for line in st.pop("_lines"):
+        if '"type":"assistant"' not in line or '"output_tokens"' not in line:
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        m = r.get("message") or {}
+        ts = parse_ts(r.get("timestamp"))
+        if not ts or ts < midnight or m.get("model") == "<synthetic>" or not m.get("id"):
+            continue
+        out = (m.get("usage") or {}).get("output_tokens") or 0
+        if m["id"] != st.get("id"):
+            st.update(id=m["id"], last=out, out=st.get("out", 0) + out, n=st.get("n", 0) + 1)
+        elif out > st.get("last", 0):
+            st.update(out=st.get("out", 0) + out - st["last"], last=out)
+
+
+def _today_codex(path, st, midnight):
+    """token_count carries the session's running total: today = last total − last total before midnight."""
+    for line in st.pop("_lines"):
+        if '"token_count"' not in line:
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        info = (r.get("payload") or {}).get("info") or {}
+        total = (info.get("total_token_usage") or {}).get("output_tokens")
+        ts = parse_ts(r.get("timestamp"))
+        if total is None or not ts:
+            continue
+        if ts < midnight:
+            st.update(base=total, last=total)
+        elif total > st.get("last", 0):
+            st.update(last=total, n=st.get("n", 0) + 1)
+    st["out"] = st.get("last", 0) - st.get("base", 0)
+
+
+def _today_files(root, pattern_depths, midnight):
+    out = []
+    for depth in pattern_depths:
+        for p in glob.glob(os.path.join(root, *depth)):
+            try:
+                if os.path.getmtime(p) >= midnight:
+                    out.append(p)
+            except OSError:
+                pass
+    return out
+
+
+def today_totals(now):
+    """{"claude": {"out", "n"}, "codex": {...}} since local midnight, through an incremental file cache."""
+    midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    day = time.strftime("%Y-%m-%d", time.localtime(now))
+    try:
+        with open(TODAY_CACHE, encoding="utf-8") as fh:
+            cache = json.load(fh)
+    except (OSError, ValueError):
+        cache = {}
+    if cache.get("day") != day:
+        cache = {"day": day, "files": {}}
+    if now - cache.get("at", 0) < TODAY_TTL and "totals" in cache:
+        return cache["totals"]
+    files = cache["files"]
+    # Claude: main transcripts and subagent ones; Codex: rollouts from the last week (old sessions may resume)
+    sources = {
+        "claude": (_today_claude, _today_files(ROOT, [("*", "*.jsonl"), ("*", "*", "subagents", "*.jsonl")], midnight)),
+        "codex": (_today_codex, _today_files(CODEX_ROOT, [("*", "*", "*", "rollout-*.jsonl")], midnight)),
+    }
+    totals = {}
+    for src, (parse, paths) in sources.items():
+        out = n = 0
+        for path in paths:
+            st = files.setdefault(path, {"off": 0})
+            try:
+                size = os.path.getsize(path)
+                if size < st["off"]:  # rewritten: start over
+                    st.clear()
+                    st["off"] = 0
+                if size > st["off"]:
+                    with open(path, "rb") as fh:
+                        fh.seek(st["off"])
+                        chunk = fh.read(size - st["off"])
+                    end = chunk.rfind(b"\n") + 1  # a half-written last line waits for the next scan
+                    st["off"] += end
+                    st["_lines"] = chunk[:end].decode("utf-8", "replace").splitlines()
+                    parse(path, st, midnight)
+            except OSError:
+                continue
+            st.pop("_lines", None)
+            out += st.get("out", 0)
+            n += st.get("n", 0)
+        totals[src] = {"out": out, "n": n}
+    cache.update(at=now, totals=totals)
+    try:
+        os.makedirs(os.path.dirname(TODAY_CACHE), exist_ok=True)
+        with open(TODAY_CACHE + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump(cache, fh)
+        os.replace(TODAY_CACHE + ".tmp", TODAY_CACHE)
+    except OSError:
+        pass
+    return totals
+
+
 def menu_json(rows, now, sources=("claude", "codex")):
     """Per-provider titles and table rows for the split menu bar (one icon per provider)."""
     out = {}
     desktop = desktop_session_ids() if any(r.get("src") == "claude" for r in rows) else {}
+    today = today_totals(now)
     for src in sources:
         rs = sorted((r for r in rows if r.get("src") == src),
                     key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
@@ -1517,7 +1631,7 @@ def menu_json(rows, now, sources=("claude", "codex")):
             })
         limits = claude_limits(now) if src == "claude" else codex_limits(now) if src == "codex" else []
         out[src] = {"title": title_text(rs, now), "live": any(it["live"] for it in items), "rows": items,
-                    "limits": limits}
+                    "limits": limits, "today": today.get(src)}
     return json.dumps(out, ensure_ascii=False)
 
 

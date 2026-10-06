@@ -129,7 +129,34 @@ enum DotFont {
         "O": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
         "U": ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
         "X": ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+        "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+        "F": ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+        "G": [".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".###."],
+        "H": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+        "I": [".###.", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."],
+        "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+        "M": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+        "N": ["#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"],
+        "P": ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+        "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+        "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+        "T": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+        "W": ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
+        "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+        ".": [".", ".", ".", ".", ".", ".", "#"],
+        "%": ["##..#", "##..#", "...#.", "..#..", ".#...", "#..##", "#..##"],
+        "Ч": ["#...#", "#...#", "#...#", ".####", "....#", "....#", "....#"],
+        "Н": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+        "Е": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
+        "Д": [".###.", ".#.#.", ".#.#.", ".#.#.", "#####", "#...#", "#...#"],
+        "М": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+        "🔒": [".###.", "#...#", "#...#", "#####", "##.##", "##.##", "#####"],
+        "✓": ["......#", ".....##", "#...##.", "##.##..", ".###...", "..#....", "......."],
+        "✕": ["#.....#", ".#...#.", "..#.#..", "...#...", "..#.#..", ".#...#.", "#.....#"],
     ]
+
+    // glyphs drawn in their own color instead of the label color
+    static let tints: [Character: NSColor] = ["🔒": NSColor(srgbRed: 0xEF / 255.0, green: 0x9F / 255.0, blue: 0x27 / 255.0, alpha: 1)]
 
     static var frames: [String: NSImage] = [:]
 
@@ -202,9 +229,9 @@ enum DotFont {
             if let at = logoAt, let logo {
                 logo.draw(in: NSRect(x: CGFloat(at) * cell, y: 0, width: size, height: size))
             }
-            NSColor.labelColor.setFill()
             let top = (rows - 7) / 2
             for (g, gx) in cols {
+                (tints[g] ?? .labelColor).setFill()
                 for (y, row) in glyphs[g]!.enumerated() {
                     for (cx, ch) in row.enumerated() where ch == "#" {
                         NSRect(x: CGFloat(gx + cx) * cell, y: CGFloat(top + y) * cell, width: px, height: px).fill()
@@ -292,37 +319,24 @@ enum Table {
 enum Limits {
     static func color(_ pct: Int, brand: NSColor) -> NSColor { pct >= 80 ? .systemRed : brand }
 
-    // horizontal meter for the card header: `cells` squares, lit share = used share
-    static func drawBar(_ pct: Int, at p: NSPoint, cells: Int, cell: CGFloat, brand: NSColor) {
-        let lit = Int((Double(pct) / 100 * Double(cells)).rounded())
-        for i in 0..<cells {
-            (i < lit ? color(pct, brand: brand) : NSColor.labelColor.withAlphaComponent(0.12)).setFill()
-            NSRect(x: p.x + CGFloat(i) * cell, y: p.y, width: cell * 3 / 4, height: cell * 3 / 4 * 1.6).fill()
-        }
-    }
-
-    // vertical mini meters for the ears: one column per window, 6 cells tall
-    static let rows = 6, cell: CGFloat = 2.5
+    // ear meters: closed, one column per window, 6 cells tall; open, one row per window (see NotchView.layoutMeters)
+    static let rows = 6, cell: CGFloat = 2.5, openStep: CGFloat = 3.5
     static func earWidth(_ n: Int) -> CGFloat { n == 0 ? 0 : CGFloat(2 * n - 1) * cell }
-
-    static func earImage(_ limits: [[String: Any]], brand: NSColor) -> NSImage? {
-        guard !limits.isEmpty else { return nil }
-        let w = earWidth(limits.count), h = CGFloat(rows) * cell
-        return NSImage(size: NSSize(width: w, height: h), flipped: false) { _ in
-            for (k, l) in limits.enumerated() {
-                let pct = l["pct"] as? Int ?? 0
-                let lit = pct > 0 ? max(1, Int((Double(pct) / 100 * Double(rows)).rounded())) : 0
-                for j in 0..<rows {
-                    (j < lit ? color(pct, brand: brand) : NSColor.labelColor.withAlphaComponent(0.2)).setFill()
-                    NSRect(x: CGFloat(2 * k) * cell, y: CGFloat(j) * cell, width: cell * 0.8, height: cell * 0.8).fill()
-                }
-            }
-            return true
-        }
-    }
+    static func lit(_ pct: Int, of n: Int) -> Int { pct > 0 ? max(1, Int((Double(pct) / 100 * Double(n)).rounded())) : 0 }
 }
 
+
 let noSessions = "нет активных сессий за 2 ч"
+
+func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
+    n % 10 == 1 && n % 100 != 11 ? one : (2...4).contains(n % 10) && !(12...14).contains(n % 100) ? few : many
+}
+
+// 950, 8.2K, 640K, 1.8M, 18M
+func compactCount(_ n: Int) -> String {
+    func f(_ v: Double, _ u: String) -> String { v < 10 ? String(format: "%.1f%@", v, u) : "\(Int(v.rounded()))\(u)" }
+    return n < 1000 ? "\(n)" : n < 1_000_000 ? f(Double(n) / 1000, "K") : f(Double(n) / 1_000_000, "M")
+}
 
 func sessionCount(_ n: Int) -> String {
     let word = n % 10 == 1 && n % 100 != 11 ? "сессия"
@@ -419,23 +433,171 @@ final class ProviderItem {
     }
 }
 
+// permission requests from permission-hook.py: <id>.json in, <id>.answer ("allow"/"deny"/"pass") out.
+// While the app hosting the session is in front the request is passed to the chat's own dialog at once and
+// stays here only as a reminder ("state": "chat") until its tool_result shows up in the transcript.
+final class Permissions {
+    static let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/claude-speed/permissions")
+    static let pidFile = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/claude-speed/app.pid")
+    private(set) var items: [[String: Any]] = []
+    var onChange: (([[String: Any]]) -> Void)?
+    private var source: DispatchSourceFileSystemObject?
+    private var clock: Timer?  // while something waits: countdown, expiry, reminder checks
+    private var reminders: [String: [String: Any]] = [:]
+    private var activation: NSObjectProtocol?
+    static let reminderTTL: Double = 15 * 60
+
+    init() {
+        try? FileManager.default.createDirectory(atPath: Self.dir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let fd = open(Self.dir, O_EVTONLY)
+        if fd >= 0 {
+            let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+            src.setEventHandler { [weak self] in self?.scan() }
+            src.setCancelHandler { close(fd) }
+            src.resume()
+            source = src
+        }
+        // switching into the session's app hands a waiting request over to the chat
+        activation = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.scan() }
+        scan()
+    }
+
+    deinit {
+        source?.cancel()
+        clock?.invalidate()
+        if let a = activation { NSWorkspace.shared.notificationCenter.removeObserver(a) }
+    }
+
+    static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func hostInFront(_ r: [String: Any]) -> Bool {
+        guard let host = r["host"] as? String, !host.isEmpty else { return false }
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier == host
+    }
+
+    // the chat answered once the transcript holds the result of this request's tool_use. The tool_use is found by
+    // tool and input (it can land in the transcript after the hook ran); only the transcript tail is read.
+    static func answered(_ r: [String: Any]) -> Bool {
+        guard let path = r["transcript"] as? String, let fh = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? fh.close() }
+        let end = (try? fh.seekToEnd()) ?? 0
+        try? fh.seek(toOffset: end > 262_144 ? end - 262_144 : 0)
+        let data = (try? fh.readToEnd()) ?? Data()
+        let tool = r["tool"] as? String ?? "", want = r["text"] as? String ?? ""
+        // the same command may have run before in this chat: only a tool_use from just before the request counts
+        let since = (r["created"] as? Double ?? 0) - 30
+        var id: String?
+        for line in data.split(separator: UInt8(ascii: "\n")).reversed() where id == nil {
+            guard line.range(of: Data("\"tool_use\"".utf8)) != nil,
+                  let rec = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                  let blocks = (rec["message"] as? [String: Any])?["content"] as? [[String: Any]] else { continue }
+            guard let ts = (rec["timestamp"] as? String).flatMap(Self.iso.date(from:)),
+                  ts.timeIntervalSince1970 >= since else { break }
+            for b in blocks.reversed() where b["type"] as? String == "tool_use" && b["name"] as? String == tool {
+                let input = b["input"] as? [String: Any] ?? [:]
+                let keys = ["command", "file_path", "notebook_path", "url", "pattern", "path"]
+                let text = keys.lazy.compactMap { input[$0].map { "\($0)" } }.first
+                if text == nil || text == want {
+                    id = b["id"] as? String
+                    break
+                }
+            }
+        }
+        guard let id else { return false }
+        return data.range(of: Data("\"tool_use_id\":\"\(id)\"".utf8)) != nil
+    }
+
+    // the hook only waits for an app that announced itself
+    static func announce(_ on: Bool) {
+        if on {
+            try? "\(getpid())".write(toFile: pidFile, atomically: true, encoding: .utf8)
+        } else if (try? String(contentsOfFile: pidFile, encoding: .utf8)) == "\(getpid())" {
+            try? FileManager.default.removeItem(atPath: pidFile)
+        }
+    }
+
+    func scan() {
+        let now = Date().timeIntervalSince1970
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.dir)) ?? []
+        var asks = names.filter { $0.hasSuffix(".json") }.compactMap { name -> [String: Any]? in
+            let path = (Self.dir as NSString).appendingPathComponent(name)
+            guard let d = FileManager.default.contents(atPath: path),
+                  let r = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+                  (r["expires"] as? Double ?? 0) > now,
+                  !FileManager.default.fileExists(atPath: path.replacingOccurrences(of: ".json", with: ".answer"))
+            else { return nil }
+            return r
+        }
+        for r in asks where Self.hostInFront(r) { pass(r) }
+        asks.removeAll { reminders[$0["id"] as? String ?? ""] != nil }
+        reminders = reminders.filter { _, r in
+            now - (r["created"] as? Double ?? 0) < Self.reminderTTL && !Self.answered(r)
+        }
+        items = (asks + reminders.values).sorted { ($0["created"] as? Double ?? 0) < ($1["created"] as? Double ?? 0) }
+        if items.isEmpty {
+            clock?.invalidate()
+            clock = nil
+        } else if clock == nil {
+            clock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.scan() }
+        }
+        onChange?(items)
+    }
+
+    // the user is looking at the session's own app: let Claude Code show its dialog, keep a reminder here
+    private func pass(_ r: [String: Any]) {
+        guard let id = r["id"] as? String else { return }
+        let path = (Self.dir as NSString).appendingPathComponent(id + ".answer")
+        try? "pass".write(toFile: path, atomically: true, encoding: .utf8)
+        var rem = r
+        rem["state"] = "chat"
+        reminders[id] = rem
+    }
+
+    func answer(_ id: String, allow: Bool) {
+        let path = (Self.dir as NSString).appendingPathComponent(id + ".answer")
+        try? (allow ? "allow" : "deny").write(toFile: path, atomically: true, encoding: .utf8)
+        scan()
+    }
+}
+
 // hover card, scoreboard rows: chat title over a mono details line, mini speed history and LED speed on the right
 final class TilesView: NSView {
     var sections: [(src: String, name: String, rows: [[String: Any]])] = [] { didSet { needsDisplay = true } }
-    var limits: [String: [[String: Any]]] = [:]
     // rows that open their chat, in this view's flipped coordinates; filled while drawing
     private(set) var links: [(rect: NSRect, url: URL)] = []
     var hoverRow: Int? = nil
+    // permission requests on top of the Claude section; their buttons are hit-tested like links
+    var pending: [[String: Any]] = []
+    var today: [String: [String: Int]] = [:]  // per provider: output tokens ("out") and responses ("n") since midnight
+    var hold: (id: String, lit: Int)? = nil
+    var hoverButton: Int? = nil
+    private(set) var buttons: [(rect: NSRect, id: String, action: String)] = []
+    static let cmdFont = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+    static let cmdLine: CGFloat = 13, cmdMaxLines = 3, holdCells = 10
+    // same idea as DANGER in permission-hook.py: the parts worth a second look
+    static let danger = try! NSRegularExpression(
+        pattern: #"\brm\s+(-\w+\s+)*|\s-delete\b|--force\b|\s-f\b|\breset\s+--hard\b|\bsudo\b|\bmkfs\S*|\bdd\s|\bchmod\s+-R|\bchown\s+-R|\bkill(all)?\b|>\s*/dev/\S+|\btruncate\b|\bdrop\s+(table|database)\b|\bdocker\s+(rm|rmi|system\s+prune)\b"#,
+        options: [.caseInsensitive])
     static let pad: CGFloat = 14, headH: CGFloat = 26, rowH: CGFloat = 40, sepH: CGFloat = 14, emptyH: CGFloat = 20
     static let digitCell: CGFloat = 2.6, histCell: CGFloat = 3.5, histRows = 7
 
     override var isFlipped: Bool { true }
 
-    static func height(_ sections: [(src: String, name: String, rows: [[String: Any]])]) -> CGFloat {
+    static func height(_ sections: [(src: String, name: String, rows: [[String: Any]])],
+                       pending: [[String: Any]] = [], width: CGFloat = 0) -> CGFloat {
         var h = pad - 2
         for (i, s) in sections.enumerated() {
             if i > 0 { h += sepH }
-            h += headH + (s.rows.isEmpty ? emptyH : CGFloat(s.rows.count) * rowH)
+            let asks = pending.filter { ($0["src"] as? String) == s.src }
+            h += headH + asks.reduce(0) { $0 + pendingHeight($1, width: width) }
+            h += s.rows.isEmpty ? (asks.isEmpty ? emptyH : 0) : CGFloat(s.rows.count) * rowH
         }
         return h + pad
     }
@@ -445,12 +607,46 @@ final class TilesView: NSView {
             : (DotLogo.codexFrom.blended(withFraction: 0.45, of: DotLogo.codexTo) ?? DotLogo.codexFrom)
     }
 
+    func button(at p: NSPoint) -> (index: Int, id: String, action: String)? {
+        buttons.firstIndex { $0.rect.contains(p) }.map { ($0, buttons[$0].id, buttons[$0].action) }
+    }
+
+    // the command wraps under the title, up to cmdMaxLines lines
+    static func cmdText(_ p: [String: Any], color: NSColor) -> NSAttributedString {
+        let str = p["text"] as? String ?? ""
+        let ps = NSMutableParagraphStyle()
+        ps.lineBreakMode = .byCharWrapping
+        ps.minimumLineHeight = cmdLine
+        ps.maximumLineHeight = cmdLine
+        let s = NSMutableAttributedString(string: str, attributes: [.font: cmdFont, .foregroundColor: color, .paragraphStyle: ps])
+        if p["tool"] as? String == "Bash" {
+            for m in danger.matches(in: str, range: NSRange(str.startIndex..., in: str)) {
+                s.addAttribute(.foregroundColor, value: NSColor.systemRed, range: m.range)
+            }
+        }
+        return s
+    }
+
+    static func cmdWidth(_ width: CGFloat) -> CGFloat { width - 2 * pad + 12 - 2 * askInset }
+    static let askInset: CGFloat = 13, ledCell: CGFloat = 1.8, frameStep: CGFloat = 6, frameDot: CGFloat = 2.5
+
+    static func cmdLines(_ p: [String: Any], width: CGFloat) -> Int {
+        let h = cmdText(p, color: .labelColor).boundingRect(with: NSSize(width: max(cmdWidth(width), 50), height: 1000),
+                                                         options: [.usesLineFragmentOrigin]).height
+        return min(cmdMaxLines, max(1, Int((h / cmdLine).rounded(.up))))
+    }
+
+    static func pendingHeight(_ p: [String: Any], width: CGFloat) -> CGFloat {
+        52 + CGFloat(cmdLines(p, width: width)) * cmdLine + 14
+    }
+
     func link(at p: NSPoint) -> (index: Int, url: URL)? {
         links.firstIndex { $0.rect.contains(p) }.map { ($0, links[$0].url) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         links = []
+        buttons = []
         let w = bounds.width
         var y = Self.pad - 2
         let sec = NSColor.secondaryLabelColor
@@ -460,27 +656,30 @@ final class TilesView: NSView {
                 in: NSRect(x: Self.pad, y: y + 3, width: 14, height: 14), from: .zero, operation: .sourceOver,
                 fraction: 1, respectFlipped: true, hints: nil)
             DotFont.draw(s.name.uppercased(), at: NSPoint(x: Self.pad + 22, y: y + 3), cell: 2, color: .labelColor)
-            if let ls = limits[s.src], !ls.isEmpty {
-                // right-aligned "5ч ▮▮▮▯▯ 42%  нед ▮▯▯▯▯ 28%"; it replaces the session count
-                let mono = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
-                var x = w - Self.pad
-                for l in ls.reversed() {
-                    let pct = l["pct"] as? Int ?? 0
-                    let num = text("\(pct)%", mono, pct >= 80 ? .systemRed : .labelColor)
-                    x -= num.size().width
-                    num.draw(at: NSPoint(x: x, y: y + 3))
-                    x -= 5 + 10 * 4
-                    Limits.drawBar(pct, at: NSPoint(x: x, y: y + 6), cells: 10, cell: 4, brand: Self.brand(s.src))
-                    let name = text(l["name"] as? String ?? "", mono, sec)
-                    x -= 5 + name.size().width
-                    name.draw(at: NSPoint(x: x, y: y + 3))
-                    x -= 12
-                }
+            // the limits live in the ears; the header sums up today: a large brand-colored count, then two small
+            // dim lines "tok сегодня" / "142 ответа" so the eye lands on the one number
+            if let t = today[s.src], let out = t["out"], let n = t["n"], n > 0 {
+                let small = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
+                let l1 = text("tok сегодня", small, sec), l2 = text("\(n) " + plural(n, "ответ", "ответа", "ответов"), small, sec)
+                let tw = max(l1.size().width, l2.size().width)
+                var x = w - Self.pad - tw
+                l1.draw(at: NSPoint(x: x, y: y + 1))
+                l2.draw(at: NSPoint(x: x, y: y + 11))
+                let num = compactCount(out)
+                x -= DotFont.width(num, cell: 2) + 6
+                DotFont.draw(num, at: NSPoint(x: x, y: y + 3), cell: 2, color: Self.brand(s.src))
             } else {
                 let cnt = text(sessionCount(s.rows.count), .systemFont(ofSize: 11.5), sec)
                 cnt.draw(at: NSPoint(x: w - Self.pad - cnt.size().width, y: y + 2))
             }
             y += Self.headH
+            let asks = pending.filter { ($0["src"] as? String) == s.src }
+            for p in asks {
+                let h = Self.pendingHeight(p, width: w)
+                ask(p, rect: NSRect(x: Self.pad - 6, y: y, width: w - 2 * Self.pad + 12, height: h), col: Self.brand(s.src))
+                y += h
+            }
+            if s.rows.isEmpty && !asks.isEmpty { continue }
             if s.rows.isEmpty {
                 text(noSessions, .systemFont(ofSize: 12), sec).draw(at: NSPoint(x: Self.pad, y: y))
                 y += Self.emptyH
@@ -503,6 +702,105 @@ final class TilesView: NSView {
 
     func text(_ str: String, _ font: NSFont, _ color: NSColor) -> NSAttributedString {
         NSAttributedString(string: str, attributes: [.font: font, .foregroundColor: color])
+    }
+
+    // a waiting permission request inside an amber LED frame that melts clockwise as its time runs out:
+    // tool name in dots, chat title, ✕ / ✓ (or hold-to-allow), project, then the command
+    func ask(_ p: [String: Any], rect: NSRect, col: NSColor) {
+        let id = p["id"] as? String ?? ""
+        let sec = NSColor.secondaryLabelColor
+        let amber = DotFont.tints["🔒"]!
+        let box = rect.insetBy(dx: 0, dy: 3)
+
+        // the frame: dots clockwise from the top-left corner, lit share = time left
+        let inChat = p["state"] as? String == "chat"
+        let created = p["created"] as? Double ?? 0, expires = p["expires"] as? Double ?? 0
+        let left = max(0, expires - Date().timeIntervalSince1970)
+        // a reminder has no timer: its frame stays whole and dimmer
+        let share = inChat ? 1 : expires > created ? left / (expires - created) : 0
+        let st = Self.frameStep, d = Self.frameDot
+        let (x0, y0, x1, y1) = (box.minX, box.minY, box.maxX - d, box.maxY - d)
+        var dots: [NSPoint] = []
+        var x = x0
+        while x < x1 { dots.append(NSPoint(x: x, y: y0)); x += st }
+        var y = y0
+        while y < y1 { dots.append(NSPoint(x: x1, y: y)); y += st }
+        x = x1
+        while x > x0 { dots.append(NSPoint(x: x, y: y1)); x -= st }
+        y = y1
+        while y > y0 { dots.append(NSPoint(x: x0, y: y)); y -= st }
+        let lit = Int((Double(dots.count) * share).rounded(.up))
+        for (i, pt) in dots.enumerated() {
+            (i < lit ? amber.withAlphaComponent(inChat ? 0.45 : 1) : NSColor.labelColor.withAlphaComponent(0.1)).setFill()
+            NSRect(x: pt.x, y: pt.y, width: d, height: d).fill()
+        }
+        let inner = box.insetBy(dx: Self.askInset, dy: 0)
+
+        // buttons, right to left: allow (or hold) then deny
+        var bx = inner.maxX
+        func button(_ bw: CGFloat, _ action: String, _ draw: (NSRect) -> Void) {
+            bx -= bw
+            let r = NSRect(x: bx, y: box.minY + 9, width: bw, height: 24)
+            NSColor.labelColor.withAlphaComponent(hoverButton == buttons.count ? 0.2 : 0.09).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
+            draw(r)
+            buttons.append((r, id, action))
+            bx -= 6
+        }
+        func glyph(_ g: String, _ r: NSRect, _ c: NSColor) {
+            DotFont.draw(g, at: NSPoint(x: r.midX - DotFont.width(g, cell: 2) / 2, y: r.midY - 7), cell: 2, color: c)
+        }
+        if inChat {
+            if p["open"] as? String != nil || !(p["host"] as? String ?? "").isEmpty {
+                let label = text(p["open"] as? String != nil ? "открыть чат" : "перейти", .systemFont(ofSize: 11), .labelColor)
+                button(label.size().width + 20, "open") { r in
+                    label.draw(at: NSPoint(x: r.midX - label.size().width / 2, y: r.midY - label.size().height / 2))
+                }
+            }
+        } else if p["danger"] as? Bool ?? false {
+            let label = text("держать", .systemFont(ofSize: 10.5), .systemRed)
+            let cells = CGFloat(Self.holdCells) * 5
+            button(10 + cells + 6 + label.size().width + 10, "hold") { r in
+                let lit = hold?.id == id ? hold!.lit : 0
+                for i in 0..<Self.holdCells {
+                    (i < lit ? NSColor.systemRed : NSColor.systemRed.withAlphaComponent(0.28)).setFill()
+                    NSRect(x: r.minX + 10 + CGFloat(i) * 5, y: r.midY - 1.5, width: 3, height: 3).fill()
+                }
+                label.draw(at: NSPoint(x: r.minX + 10 + cells + 6, y: r.midY - label.size().height / 2))
+            }
+        } else {
+            button(30, "allow") { glyph("✓", $0, col) }
+        }
+        if !inChat { button(30, "deny") { glyph("✕", $0, sec) } }
+
+        // LED tool name, then the chat title
+        let tool = String((p["tool"] as? String ?? "").uppercased().filter { DotFont.glyphs[$0] != nil }.prefix(9))
+        let ledW = DotFont.width(tool, cell: Self.ledCell)
+        DotFont.draw(tool, at: NSPoint(x: inner.minX, y: box.minY + 21 - 3.5 * Self.ledCell), cell: Self.ledCell,
+                     color: amber.withAlphaComponent(inChat ? 0.6 : 1))
+        let tx = inner.minX + (ledW > 0 ? ledW + 8 : 0)
+        let ps = NSMutableParagraphStyle()
+        ps.lineBreakMode = .byTruncatingTail
+        var title = p["chat"] as? String ?? ""
+        if title.isEmpty { title = "Запрос разрешения" }
+        NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor,
+                                                       .paragraphStyle: ps])
+            .draw(with: NSRect(x: tx, y: box.minY + 12, width: bx - tx - 4, height: 17), options: [.usesLineFragmentOrigin])
+        let pr = p["project"] as? String ?? ""
+        if !pr.isEmpty || inChat {
+            let mono = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+            let d = NSMutableAttributedString(attributedString: text(pr, mono, sec))
+            if inChat {
+                let place = p["host"] as? String == "com.anthropic.claudefordesktop" ? "в чате" : "в терминале"
+                d.append(text((pr.isEmpty ? "" : " · ") + "ждёт ответа " + place, mono, amber))
+            }
+            d.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: d.length))
+            d.draw(with: NSRect(x: inner.minX, y: box.minY + 34, width: inner.width, height: 14), options: [.usesLineFragmentOrigin])
+        }
+        let lines = Self.cmdLines(p, width: bounds.width)
+        Self.cmdText(p, color: NSColor.labelColor.withAlphaComponent(0.85)).draw(
+            with: NSRect(x: inner.minX, y: box.minY + 50, width: Self.cmdWidth(bounds.width), height: CGFloat(lines) * Self.cmdLine),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 
     func row(_ r: [String: Any], rect: NSRect, col: NSColor) {
@@ -601,7 +899,15 @@ final class NotchView: NSView {
     // per side: logo layer and speed-text layer
     let logos = [CALayer(), CALayer()]
     let texts = [CALayer(), CALayer()]
-    let meters = [CALayer(), CALayer()]
+    // limit meters: one layer per dot, so the columns can unroll into rows when the panel opens
+    var dots: [[CALayer]] = [[], []]
+    let meterLabels = [CALayer(), CALayer()]  // name, LED percent and reset time beside the open rows
+    var meterLimits: [[[String: Any]]] = [[], []]
+    var meterBrand: [NSColor] = [.clear, .clear]
+    var meterShown = [true, true]
+    var placed: [(logoW: CGFloat, textW: CGFloat, showText: Bool, h: CGFloat, meterW: CGFloat)?] = [nil, nil]
+    private var meterClosed: [NSPoint] = [.zero, .zero]  // bottom-left of the closed columns
+    private var meterSpan: [(a: CGFloat, b: CGFloat)] = [(0, 0), (0, 0)]  // room for the open rows
     static let meterGap: CGFloat = 5
     var onHover: ((Bool) -> Void)?
     var tracking: NSTrackingArea?
@@ -625,7 +931,7 @@ final class NotchView: NSView {
         panel.opacity = 0
         panel.actions = ["path": NSNull(), "opacity": NSNull()]
         earsView.layer?.addSublayer(panel)
-        for l in logos + texts + meters {
+        for l in logos + texts + meterLabels {
             l.contentsScale = 2
             l.actions = ["contents": NSNull(), "bounds": NSNull()]
             earsView.layer?.addSublayer(l)
@@ -651,14 +957,72 @@ final class NotchView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onHover?(true) }
     override func mouseMoved(with event: NSEvent) {
-        if !expanded { onHover?(true) } else { setHoverRow(tiles.link(at: tilesPoint(event))?.index) }
+        if !expanded { onHover?(true) } else {
+            let p = tilesPoint(event)
+            setHoverRow(tiles.link(at: p)?.index, button: tiles.button(at: p)?.index)
+        }
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }  // the panel never becomes key
     var onOpen: ((URL) -> Void)?
 
+    var onAnswer: ((String, Bool) -> Void)?
+    private var holdTimer: Timer?
+    static let holdTime = 0.8  // seconds to hold for a destructive command
+
     override func mouseDown(with event: NSEvent) {
-        guard expanded, !animating, let hit = tiles.link(at: tilesPoint(event)) else { return }
+        guard expanded, !animating else { return }
+        let p = tilesPoint(event)
+        if let b = tiles.button(at: p) {
+            if b.action == "hold" {
+                startHold(b.id)
+            } else if b.action == "open" {
+                let item = tiles.pending.first { $0["id"] as? String == b.id }
+                if let u = (item?["open"] as? String).flatMap(URL.init(string:)) {
+                    onOpen?(u)
+                } else if let host = item?["host"] as? String,
+                          let app = NSRunningApplication.runningApplications(withBundleIdentifier: host).first {
+                    app.activate()  // a terminal session has no deep link: bring its app forward
+                }
+            } else {
+                onAnswer?(b.id, b.action == "allow")
+            }
+            return
+        }
+        guard let hit = tiles.link(at: p) else { return }
         onOpen?(hit.url)
+    }
+
+    override func mouseUp(with event: NSEvent) { cancelHold() }
+
+    func startHold(_ id: String) {
+        cancelHold()
+        let start = CACurrentMediaTime()
+        tiles.hold = (id, 0)
+        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let f = (CACurrentMediaTime() - start) / NotchView.holdTime
+            if f >= 1 {
+                self.cancelHold()
+                self.onAnswer?(id, true)
+                return
+            }
+            let lit = Int(f * Double(TilesView.holdCells))
+            if lit != self.tiles.hold?.lit {
+                self.tiles.hold = (id, lit)
+                self.renderContent()
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        holdTimer = t
+    }
+
+    func cancelHold() {
+        holdTimer?.invalidate()
+        holdTimer = nil
+        if tiles.hold != nil {
+            tiles.hold = nil
+            renderContent()
+        }
     }
 
     // window point → TilesView (flipped) point inside the card raster
@@ -667,9 +1031,10 @@ final class NotchView: NSView {
         return NSPoint(x: p.x - r.minX, y: r.maxY - p.y)
     }
 
-    func setHoverRow(_ i: Int?) {
-        guard i != tiles.hoverRow else { return }
+    func setHoverRow(_ i: Int?, button b: Int? = nil) {
+        guard i != tiles.hoverRow || b != tiles.hoverButton else { return }
         tiles.hoverRow = i
+        tiles.hoverButton = b
         renderContent()
     }
     override func mouseExited(with event: NSEvent) { onHover?(false) }
@@ -801,7 +1166,15 @@ final class NotchView: NSView {
             panel.add(a, forKey: "path")
         }
         panel.path = to
-        if on { tiles.hoverRow = nil; renderContent() }
+        for i in 0..<2 {
+            let from = meterClosed[i]  // the columns' spot before the ears slide
+            if let p = placed[i] {
+                place(side: i, logoW: p.logoW, textW: p.textW, showText: p.showText, height: p.h, meterW: p.meterW,
+                      animated: true, meters: false)
+            }
+            layoutMeters(i, open: on, animated: .spring, closedFrom: from)
+        }
+        if on { tiles.hoverRow = nil; tiles.hoverButton = nil; renderContent() }
         // content: scale 0.8 → 1 from the top plus fade, like boring.notch's .scale(0.8, anchor: .top)
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = content.presentation()?.opacity ?? content.opacity
@@ -823,8 +1196,11 @@ final class NotchView: NSView {
     }
 
     // left ear reads [logo][text]|notch, right ear notch|[logo][text]; without text the left logo sits next to the notch
-    func place(side i: Int, logoW: CGFloat, textW: CGFloat, showText: Bool, height h: CGFloat, meterW: CGFloat,
-               animated: Bool) {
+    func place(side i: Int, logoW: CGFloat, textW: CGFloat, showText wantText: Bool, height h: CGFloat, meterW: CGFloat,
+               animated: Bool, meters: Bool = true) {
+        placed[i] = (logoW, textW, wantText, h, meterW)
+        // open: the speed leaves the ear (every row shows it) and its room goes to the limit rows
+        let showText = wantText && !expanded
         let y = (bounds.height - notch.height + (notch.height - h) / 2).rounded()
         let logoX: CGFloat, textX: CGFloat
         if i == 0 {
@@ -838,15 +1214,195 @@ final class NotchView: NSView {
         CATransaction.setDisableActions(!animated)
         CATransaction.setAnimationDuration(0.35)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
-        logos[i].frame = NSRect(x: logoX.rounded(), y: y, width: logoW, height: h)
+        // explicit from-values: an implicit action would start from the last committed position, which is in the
+        // coordinates of the window before a resize in this same pass, so the logo flew in from below
+        slide(logos[i], to: NSRect(x: logoX.rounded(), y: y, width: logoW, height: h), animated: animated)
         // limit meters sit on the outer side: left of the left logo, right of the right ear's text
         let mh = CGFloat(Limits.rows) * Limits.cell
         let meterX = i == 0 ? logoX - NotchView.meterGap - meterW
             : (showText ? textX + textW : logoX + logoW) + NotchView.meterGap
-        meters[i].frame = NSRect(x: meterX.rounded(), y: (bounds.height - notch.height + (notch.height - mh) / 2).rounded(),
-                                 width: meterW, height: mh)
-        texts[i].frame = NSRect(x: textX.rounded(), y: y, width: textW, height: h)
+        meterClosed[i] = NSPoint(x: meterX.rounded(), y: (bounds.height - notch.height + (notch.height - mh) / 2).rounded())
+        // open rows fill the room between the panel's content edge and the logo as it sits when open (no speed
+        // text), so the dot count never depends on whether the speed is showing
+        let edge = contentRect
+        meterSpan[i] = i == 0 ? (edge.minX + 2, notchX - NotchView.inner - logoW - NotchView.meterGap)
+            : (notchX + notch.width + NotchView.inner + logoW + NotchView.meterGap, edge.maxX - 2)
+        if meters { layoutMeters(i, open: expanded, animated: animated ? .implicit : .none) }
+        slide(texts[i], to: NSRect(x: textX.rounded(), y: y, width: textW, height: h), animated: animated)
         texts[i].opacity = showText ? 1 : 0
+        CATransaction.commit()
+    }
+}
+
+extension NotchView {
+    func slide(_ l: CALayer, to frame: NSRect, animated: Bool) {
+        let old = l.position
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        l.frame = frame
+        CATransaction.commit()
+        guard animated, old != l.position else { return }
+        let a = CABasicAnimation(keyPath: "position")
+        a.fromValue = l.animation(forKey: "position") != nil ? (l.presentation()?.position ?? old) : old
+        a.toValue = l.position
+        a.duration = 0.35
+        a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        l.add(a, forKey: "position")
+    }
+
+    enum MeterMotion { case none, implicit, spring }
+
+    func setMeters(_ i: Int, limits: [[String: Any]], brand: NSColor) {
+        meterLimits[i] = limits
+        meterBrand[i] = brand
+        layoutMeters(i, open: expanded, animated: .none)
+    }
+
+    func setMetersShown(_ i: Int, _ on: Bool, animated: Bool) {
+        meterShown[i] = on
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated)
+        for d in dots[i] { d.opacity = on ? 1 : 0 }
+        if !on { meterLabels[i].opacity = 0 }
+        CATransaction.commit()
+    }
+
+    // open layout of one side: per row [name] [bar] [LED %] [reset], squeezed to the room between panel edge and logo
+    // open layout of one side: per row [NAME] [bar] [NN%] [RESET], all in one small LED font and strict columns,
+    // squeezed into the room between the panel edge and the logo
+    private func openLayout(_ i: Int) -> (cells: Int, block: NSRect, barX: CGFloat, rowY: [CGFloat], image: NSImage?) {
+        let ls = meterLimits[i]
+        let c: CGFloat = 1, gap: CGFloat = 5
+        let names = ls.map { ($0["name"] as? String ?? "").uppercased() }
+        var resets = ls.map { ($0["reset"] as? String ?? "").uppercased() }
+        let pcts = ls.map { "\($0["pct"] as? Int ?? 0)%" }
+        let pctW = pcts.map { DotFont.width($0, cell: c) }.max() ?? 0
+        var nameW = names.map { DotFont.width($0, cell: c) }.max() ?? 0
+        var resetW = resets.map { DotFont.width($0, cell: c) }.max() ?? 0
+        let room = meterSpan[i].b - meterSpan[i].a
+        func cellsFor() -> Int {
+            Int((room - (nameW > 0 ? nameW + gap : 0) - gap - pctW - (resetW > 0 ? gap + resetW : 0)) / Limits.openStep)
+        }
+        // tight on room: the reset shrinks to its leading unit ("2Ч 23М" → "2Ч"), then goes; the name stays longest
+        if cellsFor() < 8 {
+            resets = resets.map { $0.split(separator: " ").first.map(String.init) ?? "" }
+            resetW = resets.map { DotFont.width($0, cell: c) }.max() ?? 0
+        }
+        if cellsFor() < 6 { resetW = 0 }
+        if cellsFor() < 6 { nameW = 0 }
+        let cells = min(14, max(4, cellsFor()))
+        let barW = CGFloat(cells - 1) * Limits.openStep + Limits.cell
+        let w = (nameW > 0 ? nameW + gap : 0) + barW + gap + pctW + (resetW > 0 ? gap + resetW : 0)
+        let x0 = i == 0 ? meterSpan[i].b - w : meterSpan[i].a
+        let h = notch.height, y0 = bounds.height - h
+        let mid = y0 + h / 2
+        let rowY: [CGFloat] = ls.count == 1 ? [mid] : (0..<ls.count).map { mid + 5.5 - CGFloat($0) * 11 }
+        let barX = x0 + (nameW > 0 ? nameW + gap : 0)
+        let dim = NSColor.white.withAlphaComponent(0.5)
+        let img = ls.isEmpty ? nil : NSImage(size: NSSize(width: w, height: h), flipped: true) { _ in
+            for (k, l) in ls.enumerated() {
+                let top = (y0 + h - rowY[k]) - 3.5 * c  // flipped: rows measured from the top
+                let pct = l["pct"] as? Int ?? 0
+                let px = barX - x0 + barW + gap
+                if nameW > 0 { DotFont.draw(names[k], at: NSPoint(x: 0, y: top), cell: c, color: dim) }
+                // percent right-aligned in its column so "6%" and "36%" end together
+                DotFont.draw(pcts[k], at: NSPoint(x: px + pctW - DotFont.width(pcts[k], cell: c), y: top), cell: c,
+                             color: pct >= 80 ? .systemRed : .white)
+                if resetW > 0 { DotFont.draw(resets[k], at: NSPoint(x: px + pctW + gap, y: top), cell: c, color: dim) }
+            }
+            return true
+        }
+        return (cells, NSRect(x: x0, y: y0, width: w, height: h), barX, rowY, img)
+    }
+
+    // closed: column k, dot i sits at height i·6/cells (extra dots stack); open: row k, dot i at position i
+    func layoutMeters(_ i: Int, open: Bool, animated: MeterMotion, closedFrom: NSPoint? = nil) {
+        let ls = meterLimits[i]
+        let o = openLayout(i)
+        let total = ls.count * o.cells
+        while dots[i].count < total {
+            let d = CALayer()
+            d.contentsScale = 2
+            d.actions = ["backgroundColor": NSNull()]
+            d.opacity = meterShown[i] ? 1 : 0
+            earsView.layer?.addSublayer(d)
+            dots[i].append(d)
+        }
+        while dots[i].count > total { dots[i].removeLast().removeFromSuperlayer() }
+        var dimClosed = NSColor.clear.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance { dimClosed = NSColor.labelColor.withAlphaComponent(0.2).cgColor }
+        let dimOpen = NSColor.white.withAlphaComponent(0.16).cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(animated != .implicit)
+        if animated == .implicit { CATransaction.setAnimationDuration(0.35) }
+        for (k, l) in ls.enumerated() {
+            let pct = l["pct"] as? Int ?? 0
+            let col = Limits.color(pct, brand: meterBrand[i]).cgColor
+            let litC = Limits.lit(pct, of: Limits.rows), litO = Limits.lit(pct, of: o.cells)
+            for n in 0..<o.cells {
+                let d = dots[i][k * o.cells + n]
+                let j = n * Limits.rows / o.cells
+                let size = open ? 2.5 : Limits.cell * 0.8
+                let openPos = CGPoint(x: o.barX + CGFloat(n) * Limits.openStep + 1.25, y: o.rowY[k])
+                let closedPos = CGPoint(x: meterClosed[i].x + CGFloat(2 * k) * Limits.cell + Limits.cell * 0.4,
+                                        y: meterClosed[i].y + CGFloat(j) * Limits.cell + Limits.cell * 0.4)
+                let openColor = n < litO ? col : dimOpen, closedColor = j < litC ? col : dimClosed
+                let pos = open ? openPos : closedPos
+                let color = open ? openColor : closedColor
+                if animated == .spring {
+                    // start from the other state's spot: the window was just resized, so the last rendered
+                    // frame sits in old coordinates; only a motion already under way continues from where it is
+                    let midFlight = d.animation(forKey: "position") != nil
+                    let c0 = closedFrom ?? meterClosed[i]
+                    let startClosed = CGPoint(x: closedPos.x - meterClosed[i].x + c0.x, y: closedPos.y - meterClosed[i].y + c0.y)
+                    let fromPos = midFlight ? (d.presentation()?.position ?? pos) : (open ? startClosed : openPos)
+                    let fromColor = midFlight ? (d.presentation()?.backgroundColor ?? color) : (open ? closedColor : openColor)
+                    // staggered so the column visibly unrolls; folding back runs the other way, faster
+                    let delay = open ? Double(n) * 0.014 + Double(k) * 0.03 : Double(o.cells - n) * 0.006
+                    let a = NotchView.spring("position", from: NSValue(point: fromPos), to: NSValue(point: pos),
+                                             response: open ? 0.45 : 0.3, damping: open ? 0.72 : 0.9)
+                    a.beginTime = CACurrentMediaTime() + delay
+                    a.fillMode = .backwards
+                    a.isRemovedOnCompletion = true
+                    d.add(a, forKey: "position")
+                    let c = CABasicAnimation(keyPath: "backgroundColor")
+                    c.fromValue = fromColor
+                    c.toValue = color
+                    c.duration = 0.3
+                    c.beginTime = CACurrentMediaTime() + delay
+                    c.fillMode = .backwards
+                    d.add(c, forKey: "color")
+                }
+                d.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+                d.position = pos
+                d.backgroundColor = color
+            }
+        }
+        // labels fade in once the dots have mostly arrived, and leave first when folding
+        let lab = meterLabels[i]
+        lab.contents = o.image.flatMap { img in
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(img.size.width * 2), pixelsHigh: Int(img.size.height * 2),
+                                       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            rep.size = img.size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            img.draw(in: NSRect(origin: .zero, size: img.size))
+            NSGraphicsContext.restoreGraphicsState()
+            return rep.cgImage
+        }
+        lab.frame = o.block
+        let target: Float = open && meterShown[i] ? 1 : 0
+        if animated == .spring {
+            let f = CABasicAnimation(keyPath: "opacity")
+            f.fromValue = lab.presentation()?.opacity ?? lab.opacity
+            f.toValue = target
+            f.duration = open ? 0.25 : 0.1
+            f.beginTime = CACurrentMediaTime() + (open ? 0.22 : 0)
+            f.fillMode = .backwards
+            lab.add(f, forKey: "fade")
+        }
+        lab.opacity = target
         CATransaction.commit()
     }
 }
@@ -866,6 +1422,10 @@ final class NotchController {
     var textW: [CGFloat] = [0, 0]
     var lastLogos: [NSImage?] = [nil, nil]
     var shrinkWork: DispatchWorkItem?
+    var pending: [[String: Any]] = []
+    var onAnswer: ((String, Bool) -> Void)?
+    private var lastDoc: [String: Any]?
+    private var lastAlive: Set<String> = []
     static let logoSize: CGFloat = 16.5
 
     init(screen: NSScreen) {
@@ -889,6 +1449,7 @@ final class NotchController {
             NSWorkspace.shared.open(url)
             if self?.hovered == true { self?.setHovered(false) }
         }
+        island.onAnswer = { [weak self] id, allow in self?.onAnswer?(id, allow) }
         setFrame(targetFrame())
         placeAll(animated: false)
         window.orderFrontRegardless()
@@ -943,7 +1504,7 @@ final class NotchController {
         if on {
             closing = false
             // fresh rows first: the window height is computed from them
-            island.tiles.limits = limitsBySrc
+            island.tiles.today = todayBySrc
             island.tiles.sections = sections()
             setFrame(targetFrame())  // grow the transparent window first, then spring the panel open inside it
             island.setExpanded(true)
@@ -958,15 +1519,33 @@ final class NotchController {
         }
     }
 
+    // a new request ticks the trackpad once; the ear shows an amber lock (plus a count) and the logo blinks until it is answered
+    func setPending(_ items: [[String: Any]]) {
+        let old = Set(pending.compactMap { $0["id"] as? String })
+        // only a request the notch itself has to answer ticks; one already in the chat doesn't
+        if items.contains(where: { !old.contains($0["id"] as? String ?? "") && $0["state"] as? String != "chat" }) {
+            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        }
+        pending = items
+        island.tiles.pending = items
+        if items.isEmpty { island.cancelHold() }
+        if let doc = lastDoc { update(doc, alive: lastAlive) }
+    }
+
+    func asks(_ src: String) -> Int { pending.filter { ($0["src"] as? String) == src }.count }
+
+    var todayBySrc: [String: [String: Int]] {
+        var out: [String: [String: Int]] = [:]
+        for p in providers { out[p.src] = data[p.src]?["today"] as? [String: Int] }
+        return out
+    }
+
     func sections() -> [(src: String, name: String, rows: [[String: Any]])] {
         providers.map { (src: $0.src, name: $0.name, rows: data[$0.src]?["rows"] as? [[String: Any]] ?? []) }
     }
 
     func limits(_ i: Int) -> [[String: Any]] { data[providers[i].src]?["limits"] as? [[String: Any]] ?? [] }
     func meterW(_ i: Int) -> CGFloat { Limits.earWidth(limits(i).count) }
-    var limitsBySrc: [String: [[String: Any]]] {
-        Dictionary(uniqueKeysWithValues: providers.indices.map { (providers[$0].src, limits($0)) })
-    }
 
     func earWidth(_ i: Int) -> CGFloat {
         guard running[i] else { return 0 }
@@ -992,7 +1571,8 @@ final class NotchController {
             let half = max(280, n.width / 2 + max(earWidth(0), earWidth(1)) + NotchView.margin + NotchView.openR.top)
             x = f.midX - half
             w = 2 * half
-            h += TilesView.height(island.tiles.sections) + NotchView.margin
+            let cardW = 2 * half - 2 * (NotchView.margin + NotchView.openR.top)
+            h += TilesView.height(island.tiles.sections, pending: island.tiles.pending, width: cardW) + NotchView.margin
         }
         return NSRect(x: x.rounded(), y: f.maxY - h, width: w.rounded(), height: h.rounded())
     }
@@ -1014,43 +1594,29 @@ final class NotchController {
             CATransaction.setDisableActions(!animated)
             CATransaction.setAnimationDuration(0.35)
             island.logos[i].opacity = running[i] ? 1 : 0
-            island.meters[i].opacity = running[i] ? 1 : 0
             CATransaction.commit()
+            island.setMetersShown(i, running[i], animated: animated)
         }
     }
 
     func update(_ doc: [String: Any], alive: Set<String>) {
+        lastDoc = doc
+        lastAlive = alive
         let wasRunning = running
         running = providers.map { alive.contains($0.src) }
         for p in providers {
             let d = doc[p.src] as? [String: Any] ?? [:]
             data[p.src] = d
-            lines[p.src] = DotLogo.line(src: p.src, live: d["live"] as? Bool ?? false, text: d["title"] as? String ?? "⚪")
+            let n = asks(p.src)
+            lines[p.src] = n > 0 ? DotLogo.line(src: p.src, live: true, text: n > 1 ? "🔒\(n)" : "🔒")
+                : DotLogo.line(src: p.src, live: d["live"] as? Bool ?? false, text: d["title"] as? String ?? "⚪")
         }
         if hovered {
-            island.tiles.limits = limitsBySrc
+            island.tiles.pending = pending
+            island.tiles.today = todayBySrc
             island.setSections(sections())
         }
-        // ear meters: two tiny images re-rendered per poll
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for i in 0..<2 {
-            var cg: CGImage?
-            if let img = Limits.earImage(limits(i), brand: TilesView.brand(providers[i].src)) {
-                // rasterize at 2x so the 2.5 pt squares stay crisp
-                let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(img.size.width * 2), pixelsHigh: Int(img.size.height * 2),
-                                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-                rep.size = img.size
-                NSGraphicsContext.saveGraphicsState()
-                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-                island.effectiveAppearance.performAsCurrentDrawingAppearance { img.draw(in: NSRect(origin: .zero, size: img.size)) }
-                NSGraphicsContext.restoreGraphicsState()
-                cg = rep.cgImage
-            }
-            island.meters[i].contents = cg
-        }
-        CATransaction.commit()
+        for i in 0..<2 { island.setMeters(i, limits: limits(i), brand: TilesView.brand(providers[i].src)) }
         let wasLive = shownLive
         var texts: [NSImage?] = [nil, nil]
         for (i, p) in providers.enumerated() {
@@ -1092,6 +1658,9 @@ final class NotchController {
         let gray = dark ? NSColor(white: 0.62, alpha: 1) : NSColor(white: 0.42, alpha: 1)
         let imgs: [NSImage?] = providers.map { p in
             let l = lines[p.src]!
+            if asks(p.src) > 0 {
+                return DotLogo.image(p.src, size: NotchController.logoSize, phase: -1, lit: Int(t * 2.5) % 2 == 0)
+            }
             return l.live
                 ? DotLogo.image(p.src, size: NotchController.logoSize, phase: DotLogo.phase(l, at: t), lit: true)
                 : DotLogo.image(p.src, size: NotchController.logoSize, phase: -1, lit: true, mono: gray)
@@ -1116,12 +1685,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var animTimer: Timer?
     var running = false
     var anyLive = false
+    let permissions = Permissions()
     // collect.py 与二进制同目录:仓库 clone 到哪都能跑,无硬编码路径
     let script = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
         .resolvingSymlinksInPath().deletingLastPathComponent()
         .appendingPathComponent("collect.py").path
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        permissions.onChange = { [weak self] items in
+            guard let self else { return }
+            self.notch?.setPending(items)
+            self.setAnimating(self.anyLive || !items.isEmpty)
+        }
         setupMode()
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -1132,15 +1707,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
-    // notch island on a notched built-in display; status-bar icons otherwise
+    func applicationWillTerminate(_ notification: Notification) { Permissions.announce(false) }
+
+    // notch island on a notched built-in display; status-bar icons otherwise; only the notch answers permission requests
     func setupMode() {
+        defer { if notch != nil { Permissions.announce(true) } }
         if let screen = NSScreen.screens.first(where: { $0.hasNotch }) {
             if notch?.screen != screen || notch == nil {
                 items = []
                 notch = NotchController(screen: screen)
+                notch?.onAnswer = { [weak self] id, allow in self?.permissions.answer(id, allow: allow) }
+                notch?.setPending(permissions.items)
             }
         } else if notch != nil || items.isEmpty {
             notch = nil
+            Permissions.announce(false)
             // created right-to-left: the last item sits leftmost, so Codex goes first to land on the right
             items = providers.reversed().map { ProviderItem(src: $0.src, name: $0.name) }
             items.forEach { $0.draw() }
@@ -1195,7 +1776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.notch?.update(doc, alive: alive)
                     for item in self.items { item.update(doc[item.src] as? [String: Any] ?? [:]) }
                 }
-                self.setAnimating(self.anyLive)
+                self.setAnimating(self.anyLive || !self.permissions.items.isEmpty)
                 self.running = false
                 self.schedule()
             }
