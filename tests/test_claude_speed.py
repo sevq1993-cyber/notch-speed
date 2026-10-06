@@ -770,20 +770,20 @@ class TestCollectMain(unittest.TestCase):
     def test_idle_empty_root(self):
         out = self.run_main()
         self.assertIn("⚪", out.splitlines()[0])
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
 
     def test_opencode_missing_db_is_not_created(self):
         self.assertFalse(os.path.exists(self.opencode_db))
         out = self.run_main()
         self.assertFalse(os.path.exists(self.opencode_db))
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
 
     def test_opencode_unknown_schema_degrades_to_empty_source(self):
         conn = sqlite3.connect(self.opencode_db)
         conn.execute("CREATE TABLE future_schema_only (id TEXT PRIMARY KEY)")
         conn.close()
         out = self.run_main()
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
         self.assertNotIn("⚡?", out)
 
     def test_opencode_reads_committed_wal(self):
@@ -822,15 +822,15 @@ class TestCollectMain(unittest.TestCase):
         self.write("-Users-x-proj-fresh", [rec_u(self.now - 9)], mtime=self.now - 9)
         out = self.run_main()
         self.assertNotIn("⏳", out.splitlines()[0])  # 等待只进下拉,不占图标栏
-        self.assertIn("жду первого ответа", out)
+        self.assertIn("waiting for first response", out)
 
     def test_waiting_with_history_says_not_first(self):
         recs = [rec_u(self.now - 200), rec_a("m1", self.now - 194, 120),
                 rec_u(self.now - 10)]
         self.write("-Users-x-proj-loop", recs, mtime=self.now - 10)
         out = self.run_main()
-        self.assertIn("жду ответа", out)
-        self.assertNotIn("жду первого ответа", out)  # 有历史响应就不是「首个」
+        self.assertIn("waiting for response", out)
+        self.assertNotIn("waiting for first response", out)  # 有历史响应就不是「首个」
 
     def test_waiting_timeout_hides_indicator(self):
         self.write("-Users-x-proj-stale", [rec_u(self.now - 300)],
@@ -843,7 +843,7 @@ class TestCollectMain(unittest.TestCase):
                    [rec_u(self.now - 9), rec_att(self.now - 8.9)],
                    mtime=self.now - 9)
         out = self.run_main()
-        self.assertIn("жду первого ответа", out)  # 行内可见;图标栏不再显示 ⏳
+        self.assertIn("waiting for first response", out)  # 行内可见;图标栏不再显示 ⏳
         self.assertNotIn("⏳", out.splitlines()[0])
 
     def test_all_error_session_surfaces_warning(self):
@@ -852,8 +852,8 @@ class TestCollectMain(unittest.TestCase):
         self.write("-Users-x-proj-broken", recs, mtime=self.now - 100)
         out = self.run_main()
         self.assertIn("⚠️", out.splitlines()[0])
-        self.assertIn("нет успешных ответов", out)
-        self.assertIn("⚠️3 ош.", out)
+        self.assertIn("no successful responses", out)
+        self.assertIn("⚠️3 err", out)
 
     def test_cold_cache_flagged(self):
         recs = [rec_u(self.now - 60),
@@ -913,7 +913,7 @@ class TestCollectMain(unittest.TestCase):
         self.write("-Users-x-proj-silentbg", [rec_u(self.now - 300)])
         self.write_agents("-Users-x-proj-silentbg", 2)
         out = self.run_main()
-        self.assertIn("фоновые задачи", out)
+        self.assertIn("background tasks", out)
         self.assertIn("🤖2·Σ10tok/s", out)
         self.assertTrue(out.splitlines()[0].startswith("🤖2 Σ"))
 
@@ -984,14 +984,14 @@ class TestCollectMain(unittest.TestCase):
         old = make_session(self.now, start=self.now - 3 * 3600, gap=30)
         self.write("-Users-x-proj-zombie", old, mtime=self.now - 60)
         out = self.run_main()
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
 
     def test_codex_zombie_excluded(self):
         # Codex 侧同样适用僵尸过滤:文件 mtime 新、内容陈旧 → 不入榜
         stale = cx_session(self.now, start=self.now - 3 * 3600, gap=30)
         self.write_codex("rollout-z.jsonl", stale, mtime=self.now - 60)
         out = self.run_main()
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
 
     def test_opencode_zombie_excluded(self):
         # session.time_updated 很新，但完成响应已在窗口外，不能成为僵尸行。
@@ -1000,14 +1000,14 @@ class TestCollectMain(unittest.TestCase):
         self.write_opencode("oc-zombie", messages, parts,
                             updated=self.now - 60)
         out = self.run_main()
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
 
     def test_codex_waiting_row(self):
         recs = cx_session(self.now, outs=(300,), start=self.now - 200)
         recs.append(cx(self.now - 10, "event_msg", "user_message"))
         self.write_codex("rollout-w.jsonl", recs, mtime=self.now - 10)
         out = self.run_main()
-        self.assertIn("⏳ жду 10с", out)  # 有历史响应:速度段照常,等待作附加段
+        self.assertIn("⏳ waiting 10s", out)  # 有历史响应:速度段照常,等待作附加段
 
     def test_opencode_waiting_row(self):
         messages, parts = oc_session(
@@ -1015,7 +1015,7 @@ class TestCollectMain(unittest.TestCase):
         messages.append(oc_message("pending", (self.now - 10) * 1000))
         self.write_opencode("oc-wait", messages, parts)
         out = self.run_main()
-        self.assertIn("⏳ жду 10с", out)
+        self.assertIn("⏳ waiting 10s", out)
 
     def test_kimi_session_rendered(self):
         # session_index 缺失 → 标签回退自 workDirKey(wd_<slug>_<hash12>)
@@ -1032,14 +1032,14 @@ class TestCollectMain(unittest.TestCase):
         recs.append(km(self.now - 10, "turn.prompt"))
         self.write_kimi("wd_waitproj-abc123def456", recs, mtime=self.now - 10)
         out = self.run_main()
-        self.assertIn("⏳ жду 10с", out)
+        self.assertIn("⏳ waiting 10s", out)
 
     def test_kimi_zombie_excluded(self):
         # 文件 mtime 新、内容陈旧 → 不入榜(僵尸过滤与 Claude/Codex 同规则)
         stale = km_session(self.now, start=self.now - 3 * 3600, gap=30)
         self.write_kimi("wd_oldproj-abc123def456", stale, mtime=self.now - 60)
         out = self.run_main()
-        self.assertIn("нет ответов за 2 ч", out)
+        self.assertIn("no responses in 2 h", out)
 
     def test_agent_transcripts_ignored(self):
         d = os.path.join(self.root, "-Users-x-proj-sub")
@@ -1048,7 +1048,7 @@ class TestCollectMain(unittest.TestCase):
             for r in make_session(self.now):
                 f.write(json.dumps(r) + "\n")
         out = self.run_main()
-        self.assertIn("нет ответов за 2 ч", out)  # 子代理文件不算会话
+        self.assertIn("no responses in 2 h", out)  # 子代理文件不算会话
 
 
 # ---------- statusline 端到端 ----------
@@ -1201,7 +1201,7 @@ class TestStatuslineMain(unittest.TestCase):
 
     def test_bad_stdin_degrades_gracefully(self):
         out = self._run(None)
-        self.assertIn("⚡ нет данных о скорости", out)
+        self.assertIn("⚡ no speed data", out)
 
 
 if __name__ == "__main__":

@@ -145,11 +145,6 @@ enum DotFont {
         "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
         ".": [".", ".", ".", ".", ".", ".", "#"],
         "%": ["##..#", "##..#", "...#.", "..#..", ".#...", "#..##", "#..##"],
-        "Ч": ["#...#", "#...#", "#...#", ".####", "....#", "....#", "....#"],
-        "Н": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
-        "Е": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
-        "Д": [".###.", ".#.#.", ".#.#.", ".#.#.", "#####", "#...#", "#...#"],
-        "М": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
         "🔒": [".###.", "#...#", "#...#", "#####", "##.##", "##.##", "#####"],
         "✓": ["......#", ".....##", "#...##.", "##.##..", ".###...", "..#....", "......."],
         "✕": ["#.....#", ".#...#.", "..#.#..", "...#...", "..#.#..", ".#...#.", "#.....#"],
@@ -279,7 +274,7 @@ enum Table {
             out.append(NSAttributedString(string: noSessions, attributes: dim))
             return out
         }
-        out.append(NSAttributedString(string: "проект · модель\tскорость\tTTFT\tкэш\tкогда", attributes: [
+        out.append(NSAttributedString(string: "project · model\tspeed\tTTFT\tcache\twhen", attributes: [
             .font: small, .foregroundColor: NSColor.tertiaryLabelColor, .paragraphStyle: ps]))
         for r in rows { out.append(row(r, base: base, dim: dim, maxLabel: maxLabel)) }
         return out
@@ -302,12 +297,12 @@ enum Table {
         } else {
             add("\t" + (r["status"] as? String ?? "—"), dim)
         }
-        if let t = r["ttft"] as? Double { add("\t\(Int(t.rounded())) с", base) } else { add("\t—", dim) }
+        if let t = r["ttft"] as? Double { add("\t\(Int(t.rounded())) s", base) } else { add("\t—", dim) }
         if let c = r["cache"] as? Int {
             add("\t\(c)%" + ((r["cold"] as? Bool ?? false) ? "❄" : ""), base)
         } else { add("\t—", dim) }
         if let w = r["wait"] as? Int {
-            add("\tждёт \(w)с", warn)
+            add("\twaiting \(w)s", warn)
         } else {
             add("\t" + (r["ago"] as? String ?? "—"), dim)
         }
@@ -326,11 +321,9 @@ enum Limits {
 }
 
 
-let noSessions = "нет активных сессий за 2 ч"
+let noSessions = "no active sessions in 2 h"
 
-func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
-    n % 10 == 1 && n % 100 != 11 ? one : (2...4).contains(n % 10) && !(12...14).contains(n % 100) ? few : many
-}
+func plural(_ n: Int, _ one: String, _ many: String) -> String { "\(n) " + (n == 1 ? one : many) }
 
 // 950, 8.2K, 640K, 1.8M, 18M
 func compactCount(_ n: Int) -> String {
@@ -339,9 +332,7 @@ func compactCount(_ n: Int) -> String {
 }
 
 func sessionCount(_ n: Int) -> String {
-    let word = n % 10 == 1 && n % 100 != 11 ? "сессия"
-        : (2...4).contains(n % 10) && !(12...14).contains(n % 100) ? "сессии" : "сессий"
-    return "\(n) \(word)"
+    plural(n, "session", "sessions")
 }
 
 let providers: [(src: String, name: String)] = [("claude", "Claude"), ("codex", "Codex")]
@@ -657,10 +648,10 @@ final class TilesView: NSView {
                 fraction: 1, respectFlipped: true, hints: nil)
             DotFont.draw(s.name.uppercased(), at: NSPoint(x: Self.pad + 22, y: y + 3), cell: 2, color: .labelColor)
             // the limits live in the ears; the header sums up today: a large brand-colored count, then two small
-            // dim lines "tok сегодня" / "142 ответа" so the eye lands on the one number
+            // dim lines "tok today" / "142 responses" so the eye lands on the one number
             if let t = today[s.src], let out = t["out"], let n = t["n"], n > 0 {
                 let small = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
-                let l1 = text("tok сегодня", small, sec), l2 = text("\(n) " + plural(n, "ответ", "ответа", "ответов"), small, sec)
+                let l1 = text("tok today", small, sec), l2 = text(plural(n, "response", "responses"), small, sec)
                 let tw = max(l1.size().width, l2.size().width)
                 var x = w - Self.pad - tw
                 l1.draw(at: NSPoint(x: x, y: y + 1))
@@ -752,13 +743,13 @@ final class TilesView: NSView {
         }
         if inChat {
             if p["open"] as? String != nil || !(p["host"] as? String ?? "").isEmpty {
-                let label = text(p["open"] as? String != nil ? "открыть чат" : "перейти", .systemFont(ofSize: 11), .labelColor)
+                let label = text(p["open"] as? String != nil ? "open chat" : "switch", .systemFont(ofSize: 11), .labelColor)
                 button(label.size().width + 20, "open") { r in
                     label.draw(at: NSPoint(x: r.midX - label.size().width / 2, y: r.midY - label.size().height / 2))
                 }
             }
         } else if p["danger"] as? Bool ?? false {
-            let label = text("держать", .systemFont(ofSize: 10.5), .systemRed)
+            let label = text("hold", .systemFont(ofSize: 10.5), .systemRed)
             let cells = CGFloat(Self.holdCells) * 5
             button(10 + cells + 6 + label.size().width + 10, "hold") { r in
                 let lit = hold?.id == id ? hold!.lit : 0
@@ -782,7 +773,7 @@ final class TilesView: NSView {
         let ps = NSMutableParagraphStyle()
         ps.lineBreakMode = .byTruncatingTail
         var title = p["chat"] as? String ?? ""
-        if title.isEmpty { title = "Запрос разрешения" }
+        if title.isEmpty { title = "Permission request" }
         NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor,
                                                        .paragraphStyle: ps])
             .draw(with: NSRect(x: tx, y: box.minY + 12, width: bx - tx - 4, height: 17), options: [.usesLineFragmentOrigin])
@@ -791,8 +782,8 @@ final class TilesView: NSView {
             let mono = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
             let d = NSMutableAttributedString(attributedString: text(pr, mono, sec))
             if inChat {
-                let place = p["host"] as? String == "com.anthropic.claudefordesktop" ? "в чате" : "в терминале"
-                d.append(text((pr.isEmpty ? "" : " · ") + "ждёт ответа " + place, mono, amber))
+                let place = p["host"] as? String == "com.anthropic.claudefordesktop" ? "in chat" : "in terminal"
+                d.append(text((pr.isEmpty ? "" : " · ") + "waiting " + place, mono, amber))
             }
             d.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: d.length))
             d.draw(with: NSRect(x: inner.minX, y: box.minY + 34, width: inner.width, height: 14), options: [.usesLineFragmentOrigin])
@@ -858,7 +849,7 @@ final class TilesView: NSView {
 
         // left: chat title, then project · model · TTFT · cache · agents · errors · when
         var chat = r["chat"] as? String ?? ""
-        if chat.isEmpty { chat = "Без названия" }
+        if chat.isEmpty { chat = "Untitled" }
         let tw = right - inner.minX
         let ps = NSMutableParagraphStyle()
         ps.lineBreakMode = .byTruncatingTail
@@ -869,13 +860,13 @@ final class TilesView: NSView {
         let d = NSMutableAttributedString(attributedString: text(r["project"] as? String ?? "", mono, col))
         var parts: [String] = []
         if let m = r["model_name"] as? String, !m.isEmpty { parts.append(m) }
-        if let t = r["ttft"] as? Double { parts.append("TTFT \(Int(t.rounded()))с") }
-        if let c = r["cache"] as? Int { parts.append("кэш \(c)%" + ((r["cold"] as? Bool ?? false) ? "❄" : "")) }
-        if let a = r["agents"] as? Int, a > 0 { parts.append("агент \(a)") }
+        if let t = r["ttft"] as? Double { parts.append("TTFT \(Int(t.rounded()))s") }
+        if let c = r["cache"] as? Int { parts.append("cache \(c)%" + ((r["cold"] as? Bool ?? false) ? "❄" : "")) }
+        if let a = r["agents"] as? Int, a > 0 { parts.append("agent \(a)") }
         d.append(text(parts.map { " · " + $0 }.joined(), mono, sec))
         if let e = r["errs"] as? Int, e > 0 { d.append(text(" · ⚠\(e)", mono, .systemRed)) }
         if let wt = r["wait"] as? Int {
-            d.append(text(" · ждёт \(wt)с", mono, .systemYellow))
+            d.append(text(" · waiting \(wt)s", mono, .systemYellow))
         } else if let ago = r["ago"] as? String {
             d.append(text(" · " + ago, mono, sec))
         }
@@ -1283,7 +1274,7 @@ extension NotchView {
         func cellsFor() -> Int {
             Int((room - (nameW > 0 ? nameW + gap : 0) - gap - pctW - (resetW > 0 ? gap + resetW : 0)) / Limits.openStep)
         }
-        // tight on room: the reset shrinks to its leading unit ("2Ч 23М" → "2Ч"), then goes; the name stays longest
+        // tight on room: the reset shrinks to its leading unit ("2H 23M" → "2H"), then goes; the name stays longest
         if cellsFor() < 8 {
             resets = resets.map { $0.split(separator: " ").first.map(String.init) ?? "" }
             resetW = resets.map { DotFont.width($0, cell: c) }.max() ?? 0
@@ -1769,7 +1760,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 process.waitUntilExit()
             } catch {}
             let doc = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let alive = wantsAlive ? Running.scan() : []
+            // demo fixture: both providers count as running
+            let demo = ProcessInfo.processInfo.environment["CLAUDE_SPEED_DEMO"] != nil
+            let alive = !wantsAlive ? [] : demo ? Set(providers.map(\.src)) : Running.scan()
             DispatchQueue.main.async {
                 if let doc {
                     self.anyLive = providers.contains { (doc[$0.src] as? [String: Any])?["live"] as? Bool ?? false }

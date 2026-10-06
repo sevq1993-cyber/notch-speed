@@ -532,16 +532,16 @@ def limit_entry(name, pct, resets_at, now):
     if left is None:
         reset = ""
     elif left >= 86400:
-        reset = "%dд %dч" % (left // 86400, left % 86400 // 3600)
+        reset = "%dd %dh" % (left // 86400, left % 86400 // 3600)
     elif left >= 3600:
-        reset = "%dч %dм" % (left // 3600, left % 3600 // 60)
+        reset = "%dh %dm" % (left // 3600, left % 3600 // 60)
     else:
-        reset = "%dм" % max(1, left // 60)
+        reset = "%dm" % max(1, left // 60)
     return {"name": name, "pct": round(float(pct)), "reset": reset}
 
 
 def window_name(minutes):
-    return "5ч" if minutes and minutes <= 6 * 60 else "нед"
+    return "5h" if minutes and minutes <= 6 * 60 else "wk"
 
 
 def codex_limits(now):
@@ -573,7 +573,7 @@ def codex_limits(now):
                 e = limit_entry(window_name(w.get("window_minutes")), w.get("used_percent"), w.get("resets_at"), now)
                 if e:
                     out.append(e)
-            out.sort(key=lambda e: e["name"] != "5ч")  # 5-hour first, then weekly
+            out.sort(key=lambda e: e["name"] != "5h")  # 5-hour first, then weekly
             return out
     return []
 
@@ -673,7 +673,7 @@ def claude_limits(now):
         except (OSError, ValueError):
             return []
     out = []
-    for key, name in (("five_hour", "5ч"), ("seven_day", "нед")):
+    for key, name in (("five_hour", "5h"), ("seven_day", "wk")):
         w = rl.get(key) or {}
         e = limit_entry(name, w.get("used_percentage"), w.get("resets_at"), now)
         if e:
@@ -1131,7 +1131,7 @@ def opencode_recent_sessions(now=None):
 
 
 def fmt_ago(sec):
-    return "%dм" % (sec // 60) if sec >= 60 else "%dс" % sec
+    return "%dm" % (sec // 60) if sec >= 60 else "%ds" % sec
 
 
 def lamp(tps):
@@ -1173,7 +1173,7 @@ def collect_rows(now, sources=None):
             pool.setdefault(mdl, []).append((out, d))
         sessions.append({"mtime": mtime, "label": project_label(dname),
                          "chat": claude_chat_title(lines),
-                         "project": "Без папки" if "scratch-workspaces" in dname else project_label(dname),
+                         "project": "No folder" if "scratch-workspaces" in dname else project_label(dname),
                          "src": "claude", "groups": groups, "err_ts": err_ts, "wait": wait,
                          "agents": (n_ag, burn), "sid": os.path.basename(path)[:-len(".jsonl")]})
 
@@ -1386,7 +1386,7 @@ def codex_chat_title(path, titles):
     if not title and "_" in stem:
         parent = titles.get(stem.rsplit("_", 1)[0][-36:], "")
         if parent:
-            title = parent + " · агент"
+            title = parent + " · agent"
     return title
 
 
@@ -1587,6 +1587,22 @@ def today_totals(now):
     return totals
 
 
+def demo_json(path):
+    """Fixture for screenshots and demos (CLAUDE_SPEED_DEMO=assets/demo.json): live rows jitter a little per poll."""
+    import random
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    for p in doc.values():
+        for r in p.get("rows", []):
+            if r.get("live") and r.get("tps"):
+                r["tps"] = max(1, r["tps"] + random.randint(-6, 6))
+                r["hist"] = (r.get("hist") or [])[1:] + [r["tps"]]
+        live = [r["tps"] for r in p.get("rows", []) if r.get("live") and r.get("tps")]
+        if live:
+            p["title"] = "🟢%d" % live[0]
+    return json.dumps(doc, ensure_ascii=False)
+
+
 def menu_json(rows, now, sources=("claude", "codex")):
     """Per-provider titles and table rows for the split menu bar (one icon per provider)."""
     out = {}
@@ -1607,13 +1623,13 @@ def menu_json(rows, now, sources=("claude", "codex")):
             status = None
             if fit is None:
                 if r["wait"] is not None:
-                    status = "ждёт первого ответа" if r["last"] is None else "ждёт ответа"
+                    status = "waiting for first response" if r["last"] is None else "waiting for response"
                 elif r["last"] is None and r["agents"][0]:
-                    status = "фоновые задачи"
+                    status = "background tasks"
                 elif r["last"] is None:
-                    status = "нет успешных ответов"
+                    status = "no successful responses"
                 else:
-                    status = "мало данных"
+                    status = "not enough data"
             items.append({
                 "label": r["label"], "model": r["model"],
                 "chat": r.get("chat", ""), "project": r.get("project") or r["label"],
@@ -1649,14 +1665,14 @@ def render(rows, now):
         if fit is None:
             if r["wait"] is not None:
                 # 「首个」只对真·新会话(无任何历史响应)成立,否则与「最近Ntok」矛盾
-                segs.append("⏳ жду %sответа %dс"
-                            % ("первого " if r["last"] is None else "", r["wait"]))
+                segs.append("⏳ waiting for %sresponse %ds"
+                            % ("first " if r["last"] is None else "", r["wait"]))
             elif r["last"] is None and r["agents"][0]:
-                segs.append("фоновые задачи")  # no main-chain response; speed lives in the 🤖 segment
+                segs.append("background tasks")  # no main-chain response; speed lives in the 🤖 segment
             elif r["last"] is None:
-                segs.append("🔴 нет успешных ответов")  # all-error session: no groups, the ⚠️ segment explains why
+                segs.append("🔴 no successful responses")  # all-error session: no groups, the ⚠️ segment explains why
             else:
-                segs.append("⚪ мало данных")
+                segs.append("⚪ not enough data")
         elif fit[1] is None:
             lp = "🟢" if fit[0] >= 50 else "⚪"
             segs.append("%s ≥%.0f tok/s" % (lp, fit[0]))
@@ -1664,7 +1680,7 @@ def render(rows, now):
             seg = "%s %s%.0f tok/s TTFT %.0fs" % (
                 lamp(fit[0]), "≈" if r["glob"] else "", fit[0], fit[1])
             if r["win"] and r["win"] > FIT_WINDOW_START:
-                seg += "·окно %dм" % round(r["win"] / 60)
+                seg += "·window %dm" % round(r["win"] / 60)
             segs.append(seg)
         n_ag, burn = r["agents"]
         if n_ag:
@@ -1673,21 +1689,21 @@ def render(rows, now):
         if g:
             denom = g["inp"] + g["cr"] + g["cc"]
             if denom > 0:
-                seg = "кэш %d%%" % round(100 * g["cr"] / denom)
+                seg = "cache %d%%" % round(100 * g["cr"] / denom)
                 if g["cc"] > g["cr"]:
                     seg += "❄"
                 segs.append(seg)
         nerr = sum(1 for e in r["err_ts"] if now - e <= ERR_ROW_WINDOW)
         if nerr:
-            segs.append("⚠️%d ош." % nerr)
+            segs.append("⚠️%d err" % nerr)
         if r["wait"] is not None and fit is not None:
-            segs.append("⏳ жду %dс" % r["wait"])
+            segs.append("⏳ waiting %ds" % r["wait"])
         if g:
-            segs.append("посл. %dtok·%.0fs" % (g["out"], g["end"] - g["start"]))
-            segs.append("%s назад" % fmt_ago(now - r["end"]))
+            segs.append("last %dtok·%.0fs" % (g["out"], g["end"] - g["start"]))
+            segs.append("%s ago" % fmt_ago(now - r["end"]))
         print("%s  %s" % (head, "  ".join(segs)))
     if not rows:
-        print("нет ответов за 2 ч")
+        print("no responses in 2 h")
 
 
 
@@ -1698,6 +1714,9 @@ def main(argv=None):
         refresh_claude_usage(now)
         return
     menu = "--menu-json" in argv
+    if menu and os.environ.get("CLAUDE_SPEED_DEMO"):
+        print(demo_json(os.environ["CLAUDE_SPEED_DEMO"]))
+        return
     rows = collect_rows(now, sources=("claude", "codex") if menu else None)
     if "--json" in argv:
         print(rows_to_json(rows, now))

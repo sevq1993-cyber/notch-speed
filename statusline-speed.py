@@ -255,8 +255,8 @@ def speed_parts(info, now):
     if fit is None:
         if groups:  # 有响应但样本不足以拆分:只报最近一条的规模,不虚报速度
             g = groups[-1]
-            parts.append(paint("dim", "⚡мало данных") + " " +
-                         paint("text", "посл. %dtok·%.0fs" % (g["out"], g["end"] - g["start"])))
+            parts.append(paint("dim", "⚡not enough data") + " " +
+                         paint("text", "last %dtok·%.0fs" % (g["out"], g["end"] - g["start"])))
     else:
         tps, ttft = fit
         # 纯生成速度阈值(已剥离 TTFT): 绿≥50 黄≥30 红<30
@@ -269,15 +269,15 @@ def speed_parts(info, now):
             seg = (paint(sk, "⚡%.0f tok/s" % tps) + " " +
                    paint(tk, "TTFT %.1fs" % ttft))
             if win and win > FIT_WINDOW_START:  # 扩窗才标口径,常态不占宽
-                seg += paint("dim", "·окно %dм" % round(win / 60))
+                seg += paint("dim", "·window %dm" % round(win / 60))
             parts.append(seg)
         g = groups[-1]
         denom = g["inp"] + g["cr"] + g["cc"]
         if denom > 0:
             hit = 100.0 * g["cr"] / denom
             hk = "ok" if hit >= 100 * CACHE_OK else ("warn" if hit >= 50 else "bad")
-            parts.append(paint(hk, "кэш %.0f%%%s" % (hit, "❄" if g["cc"] > g["cr"] else "")))
-        parts.append(paint("text", "посл. %dtok·%.0fs" % (g["out"], g["end"] - g["start"])))
+            parts.append(paint(hk, "cache %.0f%%%s" % (hit, "❄" if g["cc"] > g["cr"] else "")))
+        parts.append(paint("text", "last %dtok·%.0fs" % (g["out"], g["end"] - g["start"])))
 
     n_ag, burn, _ = agent_metrics(subagent_paths(info.get("transcript_path")), now)
     if n_ag:  # 后台子代理在跑:代理数 + 舰队燃烧率
@@ -285,7 +285,7 @@ def speed_parts(info, now):
 
     nerr = sum(1 for e in err_ts if now - e <= ERR_ROW_WINDOW)
     if nerr:
-        parts.append(paint("bad", "⚠️%d ош." % nerr))
+        parts.append(paint("bad", "⚠️%d err" % nerr))
     return parts
 
 
@@ -362,7 +362,7 @@ def main(argv=None):
         ck = "bad" if pct >= 85 else ("warn" if pct >= 60 else "text")
         parts.append(paint(ck, "ctx %.0f%%" % pct))
 
-    print(SEP.join(parts) if parts else "⚡ нет данных о скорости")
+    print(SEP.join(parts) if parts else "⚡ no speed data")
 
 
 if __name__ == "__main__":
