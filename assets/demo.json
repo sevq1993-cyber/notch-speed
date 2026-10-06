@@ -1,0 +1,14 @@
+{"claude": {"title": "🟢96", "live": true,
+  "limits": [{"name": "5h", "pct": 38, "reset": "2h 14m"}, {"name": "wk", "pct": 21, "reset": "4d 6h"}],
+  "today": {"out": 642300, "n": 418},
+  "rows": [
+    {"label": "notch-speed", "model": "opus5.5", "chat": "Refactor the notch animation", "project": "notch-speed", "live": true, "model_name": "Opus 5.5", "tps": 96, "approx": false, "lower": false, "ttft": 1.2, "cache": 99, "cold": false, "wait": null, "ago": "2s", "errs": 0, "agents": 0, "status": null, "hist": [71, 88, 92, 85, 101, 97, 94, 96], "open": null},
+    {"label": "webshop", "model": "sonnet5.5", "chat": "Add Stripe checkout tests", "project": "webshop", "live": false, "model_name": "Sonnet 5.5", "tps": 142, "approx": false, "lower": false, "ttft": 0.9, "cache": 100, "cold": false, "wait": null, "ago": "12m", "errs": 0, "agents": 2, "status": null, "hist": [120, 135, 150, 128, 146, 139, 151, 142], "open": null}
+  ]},
+ "codex": {"title": "🟢64", "live": true,
+  "limits": [{"name": "5h", "pct": 12, "reset": "3h 41m"}, {"name": "wk", "pct": 47, "reset": "2d 19h"}],
+  "today": {"out": 189400, "n": 233},
+  "rows": [
+    {"label": "api-server", "model": "gpt6astra", "chat": "Migrate auth to OAuth 2.1", "project": "api-server", "live": true, "model_name": "GPT-6 Astra", "tps": 64, "approx": false, "lower": false, "ttft": 0.6, "cache": 98, "cold": false, "wait": null, "ago": "1s", "errs": 0, "agents": 0, "status": null, "hist": [55, 61, 66, 58, 70, 63, 67, 64], "open": null},
+    {"label": "docs-site", "model": "gpt6sol", "chat": "Write the getting started guide", "project": "docs-site", "live": false, "model_name": "GPT-6 Sol", "tps": 71, "approx": false, "lower": false, "ttft": 0.4, "cache": 99, "cold": false, "wait": null, "ago": "34m", "errs": 0, "agents": 0, "status": null, "hist": [62, 68, 74, 66, 72, 70, 75, 71], "open": null}
+  ]}}

@@ -1,70 +1,97 @@
-# claude-speed
+# notch-speed
 
-![CI](https://github.com/szxypi/claude-speed/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/sevq1993-cyber/notch-speed/actions/workflows/ci.yml/badge.svg)
 
-> Fork of [JuDaXia/claude-speed](https://github.com/JuDaXia/claude-speed) that adds a **Windows tray app**, **WSL support** (Windows tray merges WSL sessions), and an **embed mode** for existing statusline scripts. Measurement algorithm and METRIC spec are unchanged.
+**Your MacBook notch, turned into a live dashboard for Claude Code and Codex:** true generation speed, rate limits, today's output, and permission prompts you can approve without leaving what you're doing.
 
-**See your coding agents' real generation speed.** A macOS menu bar app / Windows tray app + Claude Code terminal statusline that separates the *true* tokens-per-second of each response from first-token latency — the number that actually fluctuates.
+![Notch opening: limits unroll from the ears, sessions appear below](assets/expand.gif)
 
-[中文文档 →](README.zh.md)
+<sub>▶ [Full-quality video (MP4)](assets/expand.mp4) · all screenshots use the bundled demo data, see [Demo mode](#demo-mode)</sub>
 
-> Unofficial community tool. Not affiliated with Anthropic.
+> Fork of [JuDaXia/claude-speed](https://github.com/JuDaXia/claude-speed) (MIT). The measurement algorithm and [METRIC spec](METRIC.md) are unchanged; this fork adds the notch UI, permission prompts, rate limits and daily totals. Unofficial community tool, not affiliated with Anthropic or OpenAI.
 
-![Menu bar with dropdown — true speed, first-token latency, last response size](assets/menubar.png)
+## What you get
 
-While a request is pending, the dropdown counts the wait live (`⏳等8秒`) — the title itself stays minimal.
+### Live speed in the notch ears
 
-```
-Statusline: Fable 5 | ⚡71 tok/s 首字4.2s | 最近1022tok·22s | ctx 70%
-```
+![Closed notch: Claude on the left, Codex on the right](assets/closed.png)
 
-## Why
+Each side of the notch is one provider: Claude on the left, Codex on the right. The LED logo animates while a model is generating, the number is the **true tokens per second** of the current response (first-token latency is fitted out, see [How it works](#how-it-works)), and the small dot columns next to the logo are your **5-hour and weekly rate limits**.
 
-Claude Code often *feels* "fast sometimes, slow sometimes". Most of that is a measurement illusion:
+### Hover to open
 
-- Every API response pays a **fixed first-token cost (TTFT, typically 5–7s)**: queueing, prompt prefill, cache lookup.
-- Naive speed = `output_tokens / total_time` therefore **collapses for short replies**: at a true 60 tok/s and 5s TTFT, a 300-token reply displays as 30 tok/s — half the real speed — while a 3000-token reply shows 55. Same server, same moment.
+![Open notch: limit rows, today's totals, one row per session](assets/open.png)
 
-claude-speed fits `duration ≈ TTFT + tokens / TPS` across your recent responses (Theil-Sen regression, robust to outliers) and reports the two numbers separately:
+Move the pointer onto the notch and it springs open:
 
-- **TPS (slope)** — the model's true generation speed. Stable. This is the headline number.
-- **TTFT (intercept)** — first-token latency. This is what actually fluctuates (cache misses, long context, server load), and what the tool alerts on.
+- **Rate limits unroll from the ears** into LED rows: `5H ▪▪▪▪······ 38% 2H 14M` — usage and time to reset, for both providers.
+- **Today at a glance**: output tokens produced today and the number of responses, per provider.
+- **One row per active session** with chat title, project, model, first-token latency, prompt-cache hit rate, a speed sparkline and the current speed. Click a row to jump straight into that chat (Claude desktop app or Codex).
 
-## Components
+### Approve permission prompts from the notch
 
-| File | What it does |
-|---|---|
-| `collect.py` | Core collector: scans active Claude Code, Codex CLI, Kimi Code and OpenCode sessions, then prints menu bar title + dropdown lines |
-| `main.swift` → `ClaudeSpeed` | macOS menu bar app (zero dependencies, compiled directly with `swiftc`), refreshes every 3s |
-| `ClaudeSpeed.ps1` + `install.ps1` | Windows tray app (pure PowerShell / WinForms, zero dependencies), same 3s refresh; can merge WSL sessions via `wsl.exe` |
-| `statusline-speed.py` | [Claude Code statusline](https://docs.anthropic.com/en/docs/claude-code/statusline) script — same math, rendered as one ANSI line under your prompt |
+![Permission request inside the notch](assets/permission.png)
 
-Works with every Claude Code client (CLI, desktop app, VS Code extension) — they all write the same transcripts. The menu bar merges four sources: **Claude Code, Codex CLI, Kimi Code and OpenCode Desktop/CLI** (see *How it works*). OpenCode has no statusline wiring; `--statusline` remains Claude Code-only. All sources are read locally; no network access, nothing leaves your machine.
+When Claude Code asks for permission (run a command, edit a file), the request appears in the notch with the tool, the chat, the project and the exact command. Click ✓ or ✕ and Claude carries on. Destructive commands (`rm`, `git push --force`, `sudo`, …) need a press-and-hold instead of a click.
+
+![Closed notch with a waiting request](assets/closed-permission.png)
+
+With the notch closed, an amber lock in the ear (plus a count) tells you something is waiting.
+
+The notch stays out of the way when it isn't needed:
+
+- If the app hosting that session (Claude desktop, your terminal) is already in front, the prompt goes straight to the chat's own dialog.
+- If nobody answers within 30 seconds, Claude Code falls back to its normal dialog and the notch keeps a reminder with an **open chat** button until the chat is answered.
+- Only one-off allow/deny decisions are made here; "always allow" rules stay in Claude Code.
 
 ## Install
 
-**Menu bar app (macOS):**
+Requires a Mac with a notch (on other Macs the same data shows as menu bar items), Xcode Command Line Tools (`xcode-select --install`) and python3.
 
 ```bash
-git clone https://github.com/JuDaXia/claude-speed && cd claude-speed
-./install.sh                # menu bar app only
-./install.sh --statusline   # + wire the Claude Code statusline
+git clone https://github.com/sevq1993-cyber/notch-speed && cd notch-speed
+./install.sh                # notch app, starts at login
+./install.sh --statusline   # + Claude Code statusline
 ```
 
-Requires Xcode Command Line Tools (`xcode-select --install`) and python3.
+The app reads Claude Code and Codex transcripts locally. The only network call is a rate-limit lookup against Anthropic's usage endpoint (the same data `/usage` shows), made with Claude Code's own login at most every 5 minutes.
 
-**What to expect right after install:** a **⚪ icon appears in the menu bar** (idle — no active session yet). Ask Claude Code or OpenCode Desktop anything and within a few seconds it becomes a live reading like `🟢71`; with `--statusline`, the speed line appears under the Claude Code input box on its next refresh — no restart needed. If nothing shows up, run `./collect.py`: it prints exactly what the menu bar would display.
+**Permission prompts** are opt-in. Add the hook to `~/.claude/settings.json`:
 
-Notes:
-- The LaunchAgent points into the cloned directory — clone it anywhere, but if you later **move the directory, re-run `install.sh`**.
-- If OpenCode uses a custom `XDG_DATA_HOME` or `OPENCODE_DB`, `install.sh` copies the current value into the LaunchAgent; re-run it after changing either variable.
-- `--statusline` backs up `~/.claude/settings.json` to `.bak` before editing.
-- **Update:** `git pull && ./install.sh` (idempotent — recompiles and restarts).
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "python3 /path/to/notch-speed/permission-hook.py", "timeout": 45 } ] }
+    ]
+  }
+}
+```
+
+`CLAUDE_SPEED_PERM_TIMEOUT` (seconds, default 30) sets how long the notch waits before handing the prompt back to Claude Code. When the app isn't running, the hook does nothing.
+
+**Update:** `git pull && ./install.sh`. **Uninstall:** `./uninstall.sh`.
+
+## Demo mode
+
+Screenshots and recordings use made-up sessions so no real chat titles or projects leak:
+
+```bash
+launchctl bootout gui/$(id -u)/com.claude-speed.menubar        # stop the regular app
+CLAUDE_SPEED_DEMO=$PWD/assets/demo.json ./ClaudeSpeed &         # run on demo data
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-speed.menubar.plist  # back to normal
+```
+
+Edit [`assets/demo.json`](assets/demo.json) to stage your own scene; live rows jitter slightly on every refresh.
+
+## Other platforms
+
+The upstream menu bar, Windows tray, WSL and statusline modes are still here.
 
 **Windows (tray app):** in PowerShell (5.1 or 7), with python 3 on PATH:
 
 ```powershell
-git clone https://github.com/szxypi/claude-speed; cd claude-speed
+git clone https://github.com/sevq1993-cyber/notch-speed; cd claude-speed
 .\install.ps1                 # tray app + autostart shortcut (shell:startup)
 .\install.ps1 -Statusline     # + wire the Claude Code statusline
 ```
@@ -74,7 +101,7 @@ A colored circle with the tok/s number appears in the tray (`⚪` idle). Hover f
 **Windows + WSL (one tray for both):** the tray cannot read WSL transcripts directly (`\\wsl$` is slow and unavailable on some kernels), so it asks the WSL copy to collect and merges the rows:
 
 ```powershell
-# clone the repo inside WSL too (e.g. ~/projects/claude-speed), then:
+# clone the repo inside WSL too (e.g. ~/projects/notch-speed), then:
 .\install.ps1 -Remotes 'wsl.exe -e python3 /home/<you>/projects/claude-speed/collect.py --json'
 ```
 
@@ -83,8 +110,8 @@ A colored circle with the tok/s number appears in the tray (`⚪` idle). Hover f
 **WSL / Linux (statusline only — no tray under WSLg):**
 
 ```bash
-git clone https://github.com/szxypi/claude-speed ~/projects/claude-speed
-~/projects/claude-speed/install.sh --statusline   # replaces ~/.claude/settings.json statusLine (backup .bak)
+git clone https://github.com/sevq1993-cyber/notch-speed ~/projects/notch-speed
+~/projects/notch-speed/install.sh --statusline   # replaces ~/.claude/settings.json statusLine (backup .bak)
 ```
 
 **Embed into an existing statusline script** (keep your own layout; works on macOS/Linux/WSL/Windows git-bash):
@@ -94,7 +121,7 @@ git clone https://github.com/szxypi/claude-speed ~/projects/claude-speed
 case "$OSTYPE" in msys*|cygwin*) py=python ;; *) py=python3 ;; esac   # Windows: python3 is the Store stub
 seg=$(printf '%s' "$input" | CLAUDE_SPEED_SEP=" | " \
       CLAUDE_SPEED_PALETTE="ok=${green}|warn=${yellow}|bad=${red}|info=${cyan}|dim=${dim}|text=${white}|reset=${reset}" \
-      "$py" ~/projects/claude-speed/statusline-speed.py --segment)
+      "$py" ~/projects/notch-speed/statusline-speed.py --segment)
 [ -n "$seg" ] && printf "\n%b" "$seg"      # its own line under your first line
 ```
 
@@ -106,33 +133,11 @@ seg=$(printf '%s' "$input" | CLAUDE_SPEED_SEP=" | " \
 { "statusLine": { "type": "command", "command": "/path/to/claude-speed/statusline-speed.py", "padding": 0 } }
 ```
 
-**Uninstall:** `./uninstall.sh` on macOS/Linux (removes the LaunchAgent and statusline wiring), `.\uninstall.ps1` on Windows (tray, Startup shortcut, statusline wiring, `CLAUDE_SPEED_REMOTES`).
+**Statusline only, any platform:** add to `~/.claude/settings.json`:
 
-## Reading the display
-
-Menu bar title — `[⚠️][lamp+speed][ 🤖N]`, e.g. `⚠️🟢71 🤖3`:
-
-| Symbol | Meaning |
-|---|---|
-| 🟢 / 🟡 / 🔴 | True generation speed ≥50 / ≥30 / <30 tok/s |
-| `≈70` | Slope borrowed from other sessions of the same model (two-stage fit — new session, few samples yet) |
-| `≥50` | Lower-bound estimate (not enough samples to split TTFT; true speed is at least this) |
-| `⚪` | Idle (no response in 10 min) or speed uncertain |
-| `⚠️` | API errors in the last 5 minutes |
-| `🤖3` | 3 background subagents currently running (Task/research agents) |
-| `🤖3 Σ140` | Background-only mode: no foreground reading, fleet burning 140 tok/s total |
-
-The title stays minimal by design — waiting indicators live in the dropdown only: `⏳等N秒` counts up while a request is pending (disappears after 120s, assumed interrupted), and sessions with no response yet show `等待首个响应`.
-
-Dropdown, one line per active session (up to 4, last 2 hours, **Claude Code, Codex CLI, Kimi Code and OpenCode merged**):
-
+```json
+{ "statusLine": { "type": "command", "command": "/path/to/notch-speed/statusline-speed.py", "padding": 0 } }
 ```
-myproject·fable5  🟢 71 tok/s 首字4s  缓存12%冷  ⚠️1错  最近1022tok·22s  4秒前
-```
-
-`首字Ns` = first-token latency · `·近N分` = fitting window when expanded beyond 10 min · `🤖N·Σtok/s` = N active background subagents and their combined burn rate · `缓存N%` = prompt cache hit rate of the last response (low values explain TTFT spikes; `冷`= cache write > read) · `⚠️N错` = API errors in last 30 min · `最近Ntok·Ns` = last response size/time · display text is currently Chinese — PRs welcome.
-
-Statusline colors: speed green ≥50 / yellow ≥30 / red <30 · TTFT green ≤5s / yellow ≤12s / red >12s · ctx yellow ≥60% / red ≥85%.
 
 ## How it works
 
@@ -199,4 +204,4 @@ AST check enforcing that the shared algorithm stays byte-identical between
 
 ## License
 
-[MIT](LICENSE)
+MIT, see [LICENSE](LICENSE). Original work © 2026 judaxia ([claude-speed](https://github.com/JuDaXia/claude-speed)); the notch UI, permission prompts, limits and daily totals were added in this fork.
