@@ -150,7 +150,9 @@ def response_groups(lines):
                        "inp": u.get("input_tokens") or 0,
                        "cr": u.get("cache_read_input_tokens") or 0,
                        "cc": u.get("cache_creation_input_tokens") or 0}
-        if ts:
+        # attachments are bookkeeping, not request events: Claude Code writes some (deferred_tools_record) together
+        # with the reply's first record, which would start the clock after the hidden thinking
+        if ts and r.get("type") != "attachment":
             last_ts = ts
     if cur:
         groups.append(cur)

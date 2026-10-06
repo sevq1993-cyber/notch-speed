@@ -115,6 +115,13 @@ class SharedAlgoMixin:
         self.assertAlmostEqual(groups[0]["start"], now - 20, delta=0.01)
         self.assertEqual(len(errs), 1)
 
+    def test_attachment_does_not_anchor(self):
+        now = time.time()
+        # Claude Code writes deferred_tools_record together with the reply's first record, after hidden thinking
+        recs = [rec_u(now - 20), rec_att(now - 5), rec_a("m1", now - 5, 100), rec_a("m1", now - 4, 1500)]
+        groups, _ = self.m.response_groups(jlines(recs))
+        self.assertAlmostEqual(groups[0]["start"], now - 20, delta=0.01)
+
     def test_leading_assistant_without_anchor_dropped(self):
         groups, _ = self.m.response_groups(jlines([rec_a("m1", time.time(), 100)]))
         self.assertEqual(groups, [])  # 无前置记录可当锚点,组无效
