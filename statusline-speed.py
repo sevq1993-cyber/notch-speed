@@ -38,7 +38,6 @@ MAX_TPS = 400           # TPS 合理上限:拟合接受域与样本过快界共�
 FIT_MIN_SAMPLES = 5     # 拆分所需最少有效响应数
 FIT_MIN_SPAN = 150      # output token 跨度需 ≥ 此值,回归才有信息量
 FIT_MIN_PAIR_DX = 50    # Theil-Sen 只取 x 差 ≥ 此值的点对,避免小分母放大噪声
-TTFT_TRUST = 10         # a fitted TTFT up to this many seconds is always plausible (see split_ttft)
 FIT_WINDOW_START = 600  # 滑动窗口起步(秒):拟合优先用近期样本,不足自动倍增扩窗
 ERR_ROW_WINDOW = 1800   # 统计近 30 分钟的 API 错误数
 CACHE_OK = 0.9          # 缓存命中率颜色阈值(绿档)
@@ -165,14 +164,6 @@ def ts_slope(pts):
     return b
 
 
-def split_ttft(pts, b):
-    """Intercept (TTFT) for slope b, or None when a long one dominates the durations: then the slope only fits
-    noise (e.g. responses of 2-6k tokens all taking ~42 s give 362 tok/s with a 36 s TTFT). Short replies
-    legitimately spend most of their time before the first token, so a few seconds always pass."""
-    ttft = max(0.0, median([y - b * x for x, y in pts]))
-    return ttft if ttft <= max(TTFT_TRUST, 0.5 * median([y for _, y in pts])) else None
-
-
 def fit_speed(groups):
     """把一批响应的(out, 端到端耗时)拆成纯生成速度与首字延迟。
 
@@ -183,9 +174,8 @@ def fit_speed(groups):
     """
     pts = clean_points(groups)
     b = ts_slope(pts)
-    ttft = split_ttft(pts, b) if b is not None else None
-    if ttft is not None:
-        return 1.0 / b, ttft
+    if b is not None:
+        return 1.0 / b, max(0.0, median([y - b * x for x, y in pts]))
     # 回退:长回复的 blended 速度。注意它是真 TPS 的严格下界(分母含 TTFT):
     # 300tok/真速60/TTFT5s 时只显 30,虚低一半。故语义是「≥」,调用方须按下界展示。
     long_tps = [o / d for o, d in pts if o >= 300]

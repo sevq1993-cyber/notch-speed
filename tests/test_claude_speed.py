@@ -39,10 +39,10 @@ sl = load_module("cs_statusline", "statusline-speed.py")
 # 两脚本必须逐字一致的共享部分
 SHARED_FUNCS = ["parse_ts", "tail_lines", "response_groups",
                 "current_model_groups", "median", "plausible_point",
-                "clean_points", "ts_slope", "split_ttft", "fit_speed", "windowed_fit",
+                "clean_points", "ts_slope", "fit_speed", "windowed_fit",
                 "subagent_paths", "agent_metrics"]
 SHARED_CONSTS = ["TAIL_BYTES", "MAX_SEC_PER_TOK", "FIT_MIN_SAMPLES",
-                 "FIT_MIN_SPAN", "FIT_MIN_PAIR_DX", "TTFT_TRUST", "FIT_WINDOW_START",
+                 "FIT_MIN_SPAN", "FIT_MIN_PAIR_DX", "FIT_WINDOW_START",
                  "ERR_ROW_WINDOW", "AGENT_ACTIVE_WINDOW",
                  "AGENT_BURN_WINDOW", "AGENT_MAX_READ", "MAX_TPS"]
 
@@ -142,18 +142,6 @@ class SharedAlgoMixin:
         groups, _ = self.m.response_groups(jlines(recs))
         fit = self.m.fit_speed(groups)
         self.assertEqual(fit, (40.0, None))  # 400tok/10s,ttft 未拆出
-
-    def test_fit_rejects_ttft_dominated_split(self):
-        now = time.time()
-        recs, t = [], now - 600
-        # durations barely grow with length: the slope is noise, so only the end-to-end lower bound is left
-        for i, (out, dur) in enumerate([(3058, 43.7), (3323, 42.8), (2490, 42.5), (5950, 96.3), (2265, 43.8), (2797, 41.3)]):
-            recs += [rec_u(t), rec_a("m%d" % i, t + dur, out)]
-            t += 100
-        groups, _ = self.m.response_groups(jlines(recs))
-        tps, ttft = self.m.fit_speed(groups)
-        self.assertIsNone(ttft)
-        self.assertLess(tps, 100)
 
     def test_insufficient_returns_none(self):
         now = time.time()
