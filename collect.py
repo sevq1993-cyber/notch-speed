@@ -18,6 +18,14 @@ import subprocess
 import sys
 import time
 import urllib.request
+
+# UI language: CLAUDE_SPEED_LANG=ru (the notch app passes the macOS language); English otherwise
+RU = os.environ.get("CLAUDE_SPEED_LANG", "").lower().startswith("ru")
+
+
+def L(en, ru):
+    return ru if RU else en
+
 from datetime import datetime
 from urllib.parse import quote
 
@@ -473,6 +481,37 @@ def codex_parse(lines):
             err_ts, label, last_trigger_ts)
 
 
+def codex_question(lines):
+    """The newest request_user_input question still waiting for its reply, or None.
+
+    Codex desktop logs the question as a function_call; the answer comes back as a user message carrying
+    <send_user_message_question_reply> with the call id. Any later user message means it was answered or dropped."""
+    ask = None
+    for line in lines:
+        if ask is None and '"request_user_input' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        p = d.get("payload") if isinstance(d, dict) else None
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") == "function_call" and str(p.get("name", "")).startswith("request_user_input"):
+            try:
+                qs = json.loads(p.get("arguments") or "{}").get("questions") or []
+            except (ValueError, AttributeError):
+                continue
+            qs = [{"question": str(q.get("title") or q.get("question") or ""),
+                   "options": [str(o) if not isinstance(o, dict) else str(o.get("label", "")) for o in q.get("options") or []]}
+                  for q in qs if isinstance(q, dict)]
+            if qs:
+                ask = {"id": p.get("call_id") or "", "questions": qs, "created": parse_ts(d.get("timestamp"))}
+        elif ask and p.get("type") == "message" and p.get("role") == "user":
+            ask = None
+    return ask
+
+
 def codex_recent_files():
     """近期活跃的 Codex 会话(布局 sessions/YYYY/MM/DD/rollout-*.jsonl)。"""
     now, found = time.time(), []
@@ -532,16 +571,16 @@ def limit_entry(name, pct, resets_at, now):
     if left is None:
         reset = ""
     elif left >= 86400:
-        reset = "%dd %dh" % (left // 86400, left % 86400 // 3600)
+        reset = L("%dd %dh", "%dд %dч") % (left // 86400, left % 86400 // 3600)
     elif left >= 3600:
-        reset = "%dh %dm" % (left // 3600, left % 3600 // 60)
+        reset = L("%dh %dm", "%dч %dм") % (left // 3600, left % 3600 // 60)
     else:
-        reset = "%dm" % max(1, left // 60)
+        reset = L("%dm", "%dм") % max(1, left // 60)
     return {"name": name, "pct": round(float(pct)), "reset": reset}
 
 
 def window_name(minutes):
-    return "5h" if minutes and minutes <= 6 * 60 else "wk"
+    return L("5h", "5ч") if minutes and minutes <= 6 * 60 else L("wk", "нед")
 
 
 def codex_limits(now):
@@ -573,7 +612,7 @@ def codex_limits(now):
                 e = limit_entry(window_name(w.get("window_minutes")), w.get("used_percent"), w.get("resets_at"), now)
                 if e:
                     out.append(e)
-            out.sort(key=lambda e: e["name"] != "5h")  # 5-hour first, then weekly
+            out.sort(key=lambda e: e["name"] != L("5h", "5ч"))  # 5-hour first, then weekly
             return out
     return []
 
@@ -673,7 +712,7 @@ def claude_limits(now):
         except (OSError, ValueError):
             return []
     out = []
-    for key, name in (("five_hour", "5h"), ("seven_day", "wk")):
+    for key, name in (("five_hour", L("5h", "5ч")), ("seven_day", L("wk", "нед"))):
         w = rl.get(key) or {}
         e = limit_entry(name, w.get("used_percentage"), w.get("resets_at"), now)
         if e:
@@ -1131,7 +1170,7 @@ def opencode_recent_sessions(now=None):
 
 
 def fmt_ago(sec):
-    return "%dm" % (sec // 60) if sec >= 60 else "%ds" % sec
+    return L("%dm", "%dм") % (sec // 60) if sec >= 60 else L("%ds", "%dс") % sec
 
 
 def lamp(tps):
@@ -1173,14 +1212,16 @@ def collect_rows(now, sources=None):
             pool.setdefault(mdl, []).append((out, d))
         sessions.append({"mtime": mtime, "label": project_label(dname),
                          "chat": claude_chat_title(lines),
-                         "project": "No folder" if "scratch-workspaces" in dname else project_label(dname),
+                         "project": L("No folder", "Без папки") if "scratch-workspaces" in dname else project_label(dname),
                          "src": "claude", "groups": groups, "err_ts": err_ts, "wait": wait,
                          "agents": (n_ag, burn), "sid": os.path.basename(path)[:-len(".jsonl")]})
 
     # ---- Codex 会话:解析出同构的组,下游流水线全部复用 ----
     codex_titles = codex_thread_names() if want("codex") else {}
     for mtime, path in (codex_recent_files() if want("codex") else []):
-        groups, err_ts, label, trig_ts = codex_parse(tail_lines(path))
+        lines = tail_lines(path)
+        groups, err_ts, label, trig_ts = codex_parse(lines)
+        ask = codex_question(lines)
         if not label or any(g["model"] == "codex" for g in groups):
             head_label, head_model = codex_head(path)
             label = label or head_label
@@ -1193,17 +1234,17 @@ def collect_rows(now, sources=None):
             wait = int(now - trig_ts)
         has_recent = bool(groups) and now - groups[-1]["end"] < SCAN_WINDOW
         has_err = any(now - e <= ERR_ROW_WINDOW for e in err_ts)
-        if not has_recent and wait is None and not has_err:
+        if not has_recent and wait is None and not has_err and not ask:
             continue
         for g in groups:
             d = g["end"] - g["start"]
             if plausible_point(g["out"], d):
                 pool.setdefault(g.get("model"), []).append((g["out"], d))
-        sessions.append({"mtime": mtime, "label": (label or "codex")[:16],
+        sessions.append({"mtime": mtime, "label": (label or "codex")[:16], "ask": ask,
                          "chat": codex_chat_title(path, codex_titles),
                          "project": label or "",
                          "src": "codex", "groups": groups, "err_ts": err_ts, "wait": wait,
-                         "agents": (0, 0.0), "sid": os.path.basename(path)[:-len(".jsonl")][-36:]})
+                         "agents": (0, 0.0), "sid": codex_thread_id(path)})
 
     # ---- Kimi Code 会话:wire.jsonl 解析出同构的组,下游流水线全部复用 ----
     klabels = kimi_session_labels() if want("kimi") else {}
@@ -1267,7 +1308,7 @@ def collect_rows(now, sources=None):
             rows.append({"end": s["mtime"], "mtime": s["mtime"], "fit": None,
                          "glob": False, "win": None, "wait": s["wait"],
                          "err_ts": s["err_ts"], "label": s["label"], "src": s["src"],
-                         "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"),
+                         "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"), "ask": s.get("ask"),
                          "model": "", "last": None, "agents": s["agents"], "hist": []})
             continue
         g = groups[-1]
@@ -1293,7 +1334,7 @@ def collect_rows(now, sources=None):
         rows.append({"end": g["end"], "mtime": s["mtime"], "fit": fit, "hist": hist,
                      "glob": borrowed, "win": win, "wait": s["wait"],
                      "err_ts": s["err_ts"], "label": s["label"], "src": s["src"],
-                     "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"),
+                     "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"), "ask": s.get("ask"),
                      "model": model_tag(g.get("model")), "last": g,
                      "agents": s["agents"]})
     rows.sort(key=lambda r: r["end"], reverse=True)
@@ -1379,15 +1420,16 @@ def claude_chat_title(lines):
     return ""
 
 
-def codex_chat_title(path, titles):
-    """Thread name; a subagent rollout (<parent>_<child>.jsonl) borrows its parent's name."""
+def codex_thread_id(path):
+    """Thread id of a rollout. Paginated history continues a thread in rollout-<time>-<thread>_<segment>.jsonl
+    (session_meta.id is still <thread>), so the thread is the first id, not the last."""
     stem = os.path.basename(path)[:-len(".jsonl")]
-    title = titles.get(stem[-36:], "")
-    if not title and "_" in stem:
-        parent = titles.get(stem.rsplit("_", 1)[0][-36:], "")
-        if parent:
-            title = parent + " · agent"
-    return title
+    return stem.rsplit("_", 1)[0][-36:] if "_" in stem else stem[-36:]
+
+
+def codex_chat_title(path, titles):
+    """Thread name from session_index.jsonl."""
+    return titles.get(codex_thread_id(path), "")
 
 
 def codex_thread_names():
@@ -1623,13 +1665,14 @@ def menu_json(rows, now, sources=("claude", "codex")):
             status = None
             if fit is None:
                 if r["wait"] is not None:
-                    status = "waiting for first response" if r["last"] is None else "waiting for response"
+                    status = (L("waiting for first response", "ждёт первого ответа") if r["last"] is None
+                              else L("waiting for response", "ждёт ответа"))
                 elif r["last"] is None and r["agents"][0]:
-                    status = "background tasks"
+                    status = L("background tasks", "фоновые задачи")
                 elif r["last"] is None:
-                    status = "no successful responses"
+                    status = L("no successful responses", "нет успешных ответов")
                 else:
-                    status = "not enough data"
+                    status = L("not enough data", "мало данных")
             items.append({
                 "label": r["label"], "model": r["model"],
                 "chat": r.get("chat", ""), "project": r.get("project") or r["label"],
@@ -1644,6 +1687,7 @@ def menu_json(rows, now, sources=("claude", "codex")):
                 "agents": r["agents"][0], "status": status,
                 "hist": [round(x) for x in r.get("hist", [])],
                 "open": open_url(src, r.get("sid"), desktop),
+                "ask": r.get("ask"),
             })
         limits = claude_limits(now) if src == "claude" else codex_limits(now) if src == "codex" else []
         out[src] = {"title": title_text(rs, now), "live": any(it["live"] for it in items), "rows": items,
@@ -1665,14 +1709,14 @@ def render(rows, now):
         if fit is None:
             if r["wait"] is not None:
                 # 「首个」只对真·新会话(无任何历史响应)成立,否则与「最近Ntok」矛盾
-                segs.append("⏳ waiting for %sresponse %ds"
-                            % ("first " if r["last"] is None else "", r["wait"]))
+                segs.append(L("⏳ waiting for %sresponse %ds", "⏳ жду %sответа %dс")
+                            % (L("first ", "первого ") if r["last"] is None else "", r["wait"]))
             elif r["last"] is None and r["agents"][0]:
-                segs.append("background tasks")  # no main-chain response; speed lives in the 🤖 segment
+                segs.append(L("background tasks", "фоновые задачи"))  # no main-chain response; speed lives in the 🤖 segment
             elif r["last"] is None:
-                segs.append("🔴 no successful responses")  # all-error session: no groups, the ⚠️ segment explains why
+                segs.append(L("🔴 no successful responses", "🔴 нет успешных ответов"))  # all-error session: no groups, the ⚠️ segment explains why
             else:
-                segs.append("⚪ not enough data")
+                segs.append(L("⚪ not enough data", "⚪ мало данных"))
         elif fit[1] is None:
             lp = "🟢" if fit[0] >= 50 else "⚪"
             segs.append("%s ≥%.0f tok/s" % (lp, fit[0]))
@@ -1680,7 +1724,7 @@ def render(rows, now):
             seg = "%s %s%.0f tok/s TTFT %.0fs" % (
                 lamp(fit[0]), "≈" if r["glob"] else "", fit[0], fit[1])
             if r["win"] and r["win"] > FIT_WINDOW_START:
-                seg += "·window %dm" % round(r["win"] / 60)
+                seg += L("·window %dm", "·окно %dм") % round(r["win"] / 60)
             segs.append(seg)
         n_ag, burn = r["agents"]
         if n_ag:
@@ -1689,21 +1733,21 @@ def render(rows, now):
         if g:
             denom = g["inp"] + g["cr"] + g["cc"]
             if denom > 0:
-                seg = "cache %d%%" % round(100 * g["cr"] / denom)
+                seg = L("cache %d%%", "кэш %d%%") % round(100 * g["cr"] / denom)
                 if g["cc"] > g["cr"]:
                     seg += "❄"
                 segs.append(seg)
         nerr = sum(1 for e in r["err_ts"] if now - e <= ERR_ROW_WINDOW)
         if nerr:
-            segs.append("⚠️%d err" % nerr)
+            segs.append(L("⚠️%d err", "⚠️%d ош.") % nerr)
         if r["wait"] is not None and fit is not None:
-            segs.append("⏳ waiting %ds" % r["wait"])
+            segs.append(L("⏳ waiting %ds", "⏳ жду %dс") % r["wait"])
         if g:
-            segs.append("last %dtok·%.0fs" % (g["out"], g["end"] - g["start"]))
-            segs.append("%s ago" % fmt_ago(now - r["end"]))
+            segs.append(L("last %dtok·%.0fs", "посл. %dtok·%.0fs") % (g["out"], g["end"] - g["start"]))
+            segs.append(L("%s ago", "%s назад") % fmt_ago(now - r["end"]))
         print("%s  %s" % (head, "  ".join(segs)))
     if not rows:
-        print("no responses in 2 h")
+        print(L("no responses in 2 h", "нет ответов за 2 ч"))
 
 
 

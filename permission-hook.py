@@ -5,6 +5,9 @@ The request is dropped into ~/.cache/claude-speed/permissions/<id>.json for the 
 writes <id>.answer: "allow" / "deny", or "pass" when the app hosting this session (Claude desktop, a terminal)
 is in front, since the user then sees Claude Code's own dialog. "pass", no app running, or no answer within
 the timeout → no output, so Claude Code shows its own permission dialog. Only one-off decisions are made here.
+
+AskUserQuestion goes through the same hook: the notch shows the options and writes {"answers": {question: label}},
+which is handed back as updatedInput, so Claude gets the answer without its own dialog.
 """
 import json
 import os
@@ -35,7 +38,20 @@ def app_alive():
         return False
 
 
+def questions(inp):
+    """AskUserQuestion input → [{question, header, options: [label], multi}] for the notch."""
+    out = []
+    for q in inp.get("questions") or []:
+        if isinstance(q, dict) and q.get("question"):
+            out.append({"question": str(q["question"]), "header": str(q.get("header") or ""),
+                        "options": [str(o.get("label", "")) if isinstance(o, dict) else str(o) for o in q.get("options") or []],
+                        "multi": bool(q.get("multiSelect"))})
+    return out
+
+
 def summary(tool, inp):
+    if tool == "AskUserQuestion":
+        return " · ".join(q["question"] for q in questions(inp))
     if tool == "Bash":
         return str(inp.get("command", ""))
     for key in ("file_path", "notebook_path", "url", "pattern", "path"):
@@ -78,7 +94,8 @@ def main():
     if not app_alive():
         return
     tool = info.get("tool_name") or ""
-    text = summary(tool, info.get("tool_input") or {})
+    inp = info.get("tool_input") or {}
+    text = summary(tool, inp)
     chat, project, link = context(info)
     now = time.time()
     rid = uuid.uuid4().hex
@@ -88,6 +105,8 @@ def main():
            "host": os.environ.get("__CFBundleIdentifier", ""),
            "transcript": info.get("transcript_path") or "",
            "created": now, "expires": now + TIMEOUT}
+    if tool == "AskUserQuestion":
+        req["questions"] = questions(inp)
     os.makedirs(DIR, mode=0o700, exist_ok=True)
     base = os.path.join(DIR, rid)
     answer = None
@@ -102,7 +121,15 @@ def main():
                 os.remove(p)
             except OSError:
                 pass
-    if answer == "allow":
+    if answer and answer.startswith("{"):  # answers to AskUserQuestion
+        try:
+            answers = json.loads(answer).get("answers") or {}
+        except (ValueError, AttributeError):
+            return
+        if not answers:
+            return
+        decision = {"behavior": "allow", "updatedInput": {**inp, "answers": answers}}
+    elif answer == "allow":
         decision = {"behavior": "allow"}
     elif answer == "deny":
         decision = {"behavior": "deny", "message": "The user denied this from the ClaudeSpeed notch."}

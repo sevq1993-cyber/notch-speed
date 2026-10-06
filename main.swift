@@ -145,6 +145,11 @@ enum DotFont {
         "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
         ".": [".", ".", ".", ".", ".", ".", "#"],
         "%": ["##..#", "##..#", "...#.", "..#..", ".#...", "#..##", "#..##"],
+        "Ч": ["#...#", "#...#", "#...#", ".####", "....#", "....#", "....#"],
+        "Н": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+        "Е": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
+        "Д": [".###.", ".#.#.", ".#.#.", ".#.#.", "#####", "#...#", "#...#"],
+        "М": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
         "🔒": [".###.", "#...#", "#...#", "#####", "##.##", "##.##", "#####"],
         "✓": ["......#", ".....##", "#...##.", "##.##..", ".###...", "..#....", "......."],
         "✕": ["#.....#", ".#...#.", "..#.#..", "...#...", "..#.#..", ".#...#.", "#.....#"],
@@ -274,7 +279,7 @@ enum Table {
             out.append(NSAttributedString(string: noSessions, attributes: dim))
             return out
         }
-        out.append(NSAttributedString(string: "project · model\tspeed\tTTFT\tcache\twhen", attributes: [
+        out.append(NSAttributedString(string: L("project · model\tspeed\tTTFT\tcache\twhen", "проект · модель\tскорость\tTTFT\tкэш\tкогда"), attributes: [
             .font: small, .foregroundColor: NSColor.tertiaryLabelColor, .paragraphStyle: ps]))
         for r in rows { out.append(row(r, base: base, dim: dim, maxLabel: maxLabel)) }
         return out
@@ -297,12 +302,12 @@ enum Table {
         } else {
             add("\t" + (r["status"] as? String ?? "—"), dim)
         }
-        if let t = r["ttft"] as? Double { add("\t\(Int(t.rounded())) s", base) } else { add("\t—", dim) }
+        if let t = r["ttft"] as? Double { add("\t\(Int(t.rounded())) " + L("s", "с"), base) } else { add("\t—", dim) }
         if let c = r["cache"] as? Int {
             add("\t\(c)%" + ((r["cold"] as? Bool ?? false) ? "❄" : ""), base)
         } else { add("\t—", dim) }
         if let w = r["wait"] as? Int {
-            add("\twaiting \(w)s", warn)
+            add("\t" + L("waiting \(w)s", "ждёт \(w)с"), warn)
         } else {
             add("\t" + (r["ago"] as? String ?? "—"), dim)
         }
@@ -321,9 +326,20 @@ enum Limits {
 }
 
 
-let noSessions = "no active sessions in 2 h"
+// UI language: CLAUDE_SPEED_LANG, else the first macOS language; English unless it is Russian
+let uiRussian = (ProcessInfo.processInfo.environment["CLAUDE_SPEED_LANG"] ?? Locale.preferredLanguages.first ?? "")
+    .lowercased().hasPrefix("ru")
 
-func plural(_ n: Int, _ one: String, _ many: String) -> String { "\(n) " + (n == 1 ? one : many) }
+func L(_ en: String, _ ru: String) -> String { uiRussian ? ru : en }
+
+let noSessions = L("no active sessions in 2 h", "нет активных сессий за 2 ч")
+
+// "1 response" / "5 responses"; Russian has three forms: "1 ответ", "2 ответа", "5 ответов"
+func plural(_ n: Int, _ one: String, _ many: String, ru: (String, String, String)) -> String {
+    guard uiRussian else { return "\(n) " + (n == 1 ? one : many) }
+    let w = n % 10 == 1 && n % 100 != 11 ? ru.0 : (2...4).contains(n % 10) && !(12...14).contains(n % 100) ? ru.1 : ru.2
+    return "\(n) \(w)"
+}
 
 // 950, 8.2K, 640K, 1.8M, 18M
 func compactCount(_ n: Int) -> String {
@@ -332,7 +348,7 @@ func compactCount(_ n: Int) -> String {
 }
 
 func sessionCount(_ n: Int) -> String {
-    plural(n, "session", "sessions")
+    plural(n, "session", "sessions", ru: ("сессия", "сессии", "сессий"))
 }
 
 let providers: [(src: String, name: String)] = [("claude", "Claude"), ("codex", "Codex")]
@@ -551,6 +567,20 @@ final class Permissions {
         reminders[id] = rem
     }
 
+    // answers to AskUserQuestion: {"answers": {question: label}} goes back to Claude as the tool's updated input
+    func reply(_ id: String, answers: [String: String]) {
+        let path = (Self.dir as NSString).appendingPathComponent(id + ".answer")
+        if let d = try? JSONSerialization.data(withJSONObject: ["answers": answers]) {
+            try? d.write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+        scan()
+    }
+
+    func handOff(_ id: String) {
+        if let r = items.first(where: { $0["id"] as? String == id }) { pass(r) }
+        scan()
+    }
+
     func answer(_ id: String, allow: Bool) {
         let path = (Self.dir as NSString).appendingPathComponent(id + ".answer")
         try? (allow ? "allow" : "deny").write(toFile: path, atomically: true, encoding: .utf8)
@@ -565,13 +595,64 @@ final class TilesView: NSView {
     private(set) var links: [(rect: NSRect, url: URL)] = []
     var hoverRow: Int? = nil
     // permission requests on top of the Claude section; their buttons are hit-tested like links
-    var pending: [[String: Any]] = []
+    var pending: [[String: Any]] = [] {
+        didSet {
+            let ids = Set(pending.compactMap { $0["id"] as? String })
+            qstate = qstate.filter { ids.contains($0.key) }
+        }
+    }
     var today: [String: [String: Int]] = [:]  // per provider: output tokens ("out") and responses ("n") since midnight
     var hold: (id: String, lit: Int)? = nil
     var hoverButton: Int? = nil
     private(set) var buttons: [(rect: NSRect, id: String, action: String)] = []
     static let cmdFont = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
     static let cmdLine: CGFloat = 13, cmdMaxLines = 3, holdCells = 10
+    // questions (Claude's AskUserQuestion, Codex's request_user_input): one question at a time, options as pills
+    var qstate: [String: (step: Int, answers: [String: String], sel: Set<Int>)] = [:]
+    static let qFont = NSFont.systemFont(ofSize: 12.5), qLine: CGFloat = 16, qMaxLines = 4
+    static let pillFont = NSFont.systemFont(ofSize: 11.5), pillH: CGFloat = 22, pillGap: CGFloat = 6
+
+    static func qText(_ str: String, color: NSColor) -> NSAttributedString {
+        let ps = NSMutableParagraphStyle()
+        ps.lineBreakMode = .byWordWrapping
+        ps.minimumLineHeight = qLine
+        ps.maximumLineHeight = qLine
+        return NSAttributedString(string: str, attributes: [.font: qFont, .foregroundColor: color, .paragraphStyle: ps])
+    }
+
+    static func qLines(_ str: String, width: CGFloat) -> Int {
+        let h = qText(str, color: .labelColor).boundingRect(with: NSSize(width: max(cmdWidth(width), 50), height: 1000),
+                                                           options: [.usesLineFragmentOrigin]).height
+        return min(qMaxLines, max(1, Int((h / qLine).rounded(.up))))
+    }
+
+    // pills wrap left to right; rects are relative to the block's top-left corner
+    static func pills(_ labels: [String], width: CGFloat) -> [NSRect] {
+        let room = max(cmdWidth(width), 50)
+        var out: [NSRect] = [], x: CGFloat = 0, y: CGFloat = 0
+        for l in labels {
+            let w = min(room, (l as NSString).size(withAttributes: [.font: pillFont]).width + 20)
+            if x > 0 && x + w > room { x = 0; y += pillH + pillGap }
+            out.append(NSRect(x: x, y: y, width: w, height: pillH))
+            x += w + pillGap
+        }
+        return out
+    }
+
+    static func questions(_ p: [String: Any]) -> [[String: Any]]? {
+        (p["questions"] as? [[String: Any]]).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func labels(_ q: [String: Any]) -> [String] {
+        (q["options"] as? [String] ?? []) + ((q["multi"] as? Bool ?? false) ? [L("Done", "Готово")] : [])
+    }
+
+    static func questionHeight(_ qs: [[String: Any]], width: CGFloat) -> CGFloat {
+        qs.map { q -> CGFloat in
+            let text = CGFloat(qLines(q["question"] as? String ?? "", width: width)) * qLine
+            return text + 8 + (pills(labels(q), width: width).last?.maxY ?? 0)
+        }.max() ?? 0
+    }
     // same idea as DANGER in permission-hook.py: the parts worth a second look
     static let danger = try! NSRegularExpression(
         pattern: #"\brm\s+(-\w+\s+)*|\s-delete\b|--force\b|\s-f\b|\breset\s+--hard\b|\bsudo\b|\bmkfs\S*|\bdd\s|\bchmod\s+-R|\bchown\s+-R|\bkill(all)?\b|>\s*/dev/\S+|\btruncate\b|\bdrop\s+(table|database)\b|\bdocker\s+(rm|rmi|system\s+prune)\b"#,
@@ -596,6 +677,33 @@ final class TilesView: NSView {
     static func brand(_ src: String) -> NSColor {
         src == "claude" ? DotLogo.claudeColor
             : (DotLogo.codexFrom.blended(withFraction: 0.45, of: DotLogo.codexTo) ?? DotLogo.codexFrom)
+    }
+
+    // a click on an option: single choice answers this question, multi toggles until Done; returns all the
+    // answers once the last question is through
+    func pick(_ id: String, _ action: String) -> [String: String]? {
+        guard let p = pending.first(where: { $0["id"] as? String == id }), let qs = Self.questions(p) else { return nil }
+        var st = qstate[id] ?? (0, [:], [])
+        let q = qs[min(st.step, qs.count - 1)]
+        let opts = q["options"] as? [String] ?? []
+        let multi = q["multi"] as? Bool ?? false
+        if action.hasPrefix("opt:"), let i = Int(action.dropFirst(4)), i < opts.count {
+            if multi {
+                if st.sel.contains(i) { st.sel.remove(i) } else { st.sel.insert(i) }
+                qstate[id] = st
+                needsDisplay = true
+                return nil
+            }
+            st.answers[q["question"] as? String ?? ""] = opts[i]
+        } else if action == "done" {
+            guard !st.sel.isEmpty else { return nil }
+            st.answers[q["question"] as? String ?? ""] = st.sel.sorted().map { opts[$0] }.joined(separator: ", ")
+        } else { return nil }
+        st.step += 1
+        st.sel = []
+        qstate[id] = st
+        needsDisplay = true
+        return st.step >= qs.count ? st.answers : nil
     }
 
     func button(at p: NSPoint) -> (index: Int, id: String, action: String)? {
@@ -628,7 +736,8 @@ final class TilesView: NSView {
     }
 
     static func pendingHeight(_ p: [String: Any], width: CGFloat) -> CGFloat {
-        52 + CGFloat(cmdLines(p, width: width)) * cmdLine + 14
+        if let qs = questions(p) { return 52 + questionHeight(qs, width: width) + 14 }
+        return 52 + CGFloat(cmdLines(p, width: width)) * cmdLine + 14
     }
 
     func link(at p: NSPoint) -> (index: Int, url: URL)? {
@@ -651,7 +760,8 @@ final class TilesView: NSView {
             // dim lines "tok today" / "142 responses" so the eye lands on the one number
             if let t = today[s.src], let out = t["out"], let n = t["n"], n > 0 {
                 let small = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
-                let l1 = text("tok today", small, sec), l2 = text(plural(n, "response", "responses"), small, sec)
+                let l1 = text(L("tok today", "tok сегодня"), small, sec)
+                let l2 = text(plural(n, "response", "responses", ru: ("ответ", "ответа", "ответов")), small, sec)
                 let tw = max(l1.size().width, l2.size().width)
                 var x = w - Self.pad - tw
                 l1.draw(at: NSPoint(x: x, y: y + 1))
@@ -741,15 +851,22 @@ final class TilesView: NSView {
         func glyph(_ g: String, _ r: NSRect, _ c: NSColor) {
             DotFont.draw(g, at: NSPoint(x: r.midX - DotFont.width(g, cell: 2) / 2, y: r.midY - 7), cell: 2, color: c)
         }
+        let qs = Self.questions(p)
         if inChat {
             if p["open"] as? String != nil || !(p["host"] as? String ?? "").isEmpty {
-                let label = text(p["open"] as? String != nil ? "open chat" : "switch", .systemFont(ofSize: 11), .labelColor)
+                let label = text(p["open"] as? String != nil ? L("open chat", "открыть чат") : L("switch", "перейти"), .systemFont(ofSize: 11), .labelColor)
                 button(label.size().width + 20, "open") { r in
                     label.draw(at: NSPoint(x: r.midX - label.size().width / 2, y: r.midY - label.size().height / 2))
                 }
             }
+        } else if qs != nil {
+            // answer in the chat's own dialog instead
+            let label = text(L("in chat", "в чат"), .systemFont(ofSize: 11), .labelColor)
+            button(label.size().width + 20, "pass") { r in
+                label.draw(at: NSPoint(x: r.midX - label.size().width / 2, y: r.midY - label.size().height / 2))
+            }
         } else if p["danger"] as? Bool ?? false {
-            let label = text("hold", .systemFont(ofSize: 10.5), .systemRed)
+            let label = text(L("hold", "держать"), .systemFont(ofSize: 10.5), .systemRed)
             let cells = CGFloat(Self.holdCells) * 5
             button(10 + cells + 6 + label.size().width + 10, "hold") { r in
                 let lit = hold?.id == id ? hold!.lit : 0
@@ -762,10 +879,10 @@ final class TilesView: NSView {
         } else {
             button(30, "allow") { glyph("✓", $0, col) }
         }
-        if !inChat { button(30, "deny") { glyph("✕", $0, sec) } }
+        if !inChat && qs == nil { button(30, "deny") { glyph("✕", $0, sec) } }
 
         // LED tool name, then the chat title
-        let tool = String((p["tool"] as? String ?? "").uppercased().filter { DotFont.glyphs[$0] != nil }.prefix(9))
+        let tool = qs != nil ? "ASK" : String((p["tool"] as? String ?? "").uppercased().filter { DotFont.glyphs[$0] != nil }.prefix(9))
         let ledW = DotFont.width(tool, cell: Self.ledCell)
         DotFont.draw(tool, at: NSPoint(x: inner.minX, y: box.minY + 21 - 3.5 * Self.ledCell), cell: Self.ledCell,
                      color: amber.withAlphaComponent(inChat ? 0.6 : 1))
@@ -773,20 +890,51 @@ final class TilesView: NSView {
         let ps = NSMutableParagraphStyle()
         ps.lineBreakMode = .byTruncatingTail
         var title = p["chat"] as? String ?? ""
-        if title.isEmpty { title = "Permission request" }
+        if title.isEmpty { title = qs != nil ? L("Question", "Вопрос") : L("Permission request", "Запрос разрешения") }
         NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor,
                                                        .paragraphStyle: ps])
             .draw(with: NSRect(x: tx, y: box.minY + 12, width: bx - tx - 4, height: 17), options: [.usesLineFragmentOrigin])
-        let pr = p["project"] as? String ?? ""
+        var pr = p["project"] as? String ?? ""
+        let qst = qstate[id]
+        if let qs, qs.count > 1 { pr += (pr.isEmpty ? "" : " · ") + "\(min((qst?.step ?? 0) + 1, qs.count))/\(qs.count)" }
         if !pr.isEmpty || inChat {
             let mono = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
             let d = NSMutableAttributedString(attributedString: text(pr, mono, sec))
             if inChat {
-                let place = p["host"] as? String == "com.anthropic.claudefordesktop" ? "in chat" : "in terminal"
-                d.append(text((pr.isEmpty ? "" : " · ") + "waiting " + place, mono, amber))
+                let place = p["src"] as? String == "codex" ? L("in Codex", "в Codex")
+                    : p["host"] as? String == "com.anthropic.claudefordesktop" ? L("in chat", "в чате") : L("in terminal", "в терминале")
+                d.append(text((pr.isEmpty ? "" : " · ") + L("waiting ", "ждёт ответа ") + place, mono, amber))
             }
             d.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: d.length))
             d.draw(with: NSRect(x: inner.minX, y: box.minY + 34, width: inner.width, height: 14), options: [.usesLineFragmentOrigin])
+        }
+        if let qs {
+            // the current question, then its options; only a live Claude question takes clicks here
+            let q = qs[min(qst?.step ?? 0, qs.count - 1)]
+            let qstr = q["question"] as? String ?? ""
+            let n = Self.qLines(qstr, width: bounds.width)
+            Self.qText(qstr, color: NSColor.labelColor.withAlphaComponent(0.9)).draw(
+                with: NSRect(x: inner.minX, y: box.minY + 50, width: Self.cmdWidth(bounds.width), height: CGFloat(n) * Self.qLine),
+                options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            let labels = Self.labels(q), opts = (q["options"] as? [String] ?? []).count
+            let top = box.minY + 50 + CGFloat(n) * Self.qLine + 8
+            for (i, r0) in Self.pills(labels, width: bounds.width).enumerated() {
+                let r = r0.offsetBy(dx: inner.minX, dy: top)
+                let picked = qst?.sel.contains(i) ?? false, done = i >= opts
+                let live = !inChat
+                (picked ? col.withAlphaComponent(0.35) : NSColor.labelColor.withAlphaComponent(
+                    live && hoverButton == buttons.count ? 0.2 : live ? 0.09 : 0.05)).setFill()
+                NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+                let ps2 = NSMutableParagraphStyle()
+                ps2.lineBreakMode = .byTruncatingTail
+                ps2.alignment = .center
+                NSAttributedString(string: labels[i], attributes: [
+                    .font: Self.pillFont, .paragraphStyle: ps2,
+                    .foregroundColor: done ? col : NSColor.labelColor.withAlphaComponent(live ? 1 : 0.6)])
+                    .draw(with: NSRect(x: r.minX + 8, y: r.minY + 3.5, width: r.width - 16, height: 15), options: [.usesLineFragmentOrigin])
+                if live { buttons.append((r, id, done ? "done" : "opt:\(i)")) }
+            }
+            return
         }
         let lines = Self.cmdLines(p, width: bounds.width)
         Self.cmdText(p, color: NSColor.labelColor.withAlphaComponent(0.85)).draw(
@@ -849,7 +997,7 @@ final class TilesView: NSView {
 
         // left: chat title, then project · model · TTFT · cache · agents · errors · when
         var chat = r["chat"] as? String ?? ""
-        if chat.isEmpty { chat = "Untitled" }
+        if chat.isEmpty { chat = L("Untitled", "Без названия") }
         let tw = right - inner.minX
         let ps = NSMutableParagraphStyle()
         ps.lineBreakMode = .byTruncatingTail
@@ -860,13 +1008,13 @@ final class TilesView: NSView {
         let d = NSMutableAttributedString(attributedString: text(r["project"] as? String ?? "", mono, col))
         var parts: [String] = []
         if let m = r["model_name"] as? String, !m.isEmpty { parts.append(m) }
-        if let t = r["ttft"] as? Double { parts.append("TTFT \(Int(t.rounded()))s") }
-        if let c = r["cache"] as? Int { parts.append("cache \(c)%" + ((r["cold"] as? Bool ?? false) ? "❄" : "")) }
-        if let a = r["agents"] as? Int, a > 0 { parts.append("agent \(a)") }
+        if let t = r["ttft"] as? Double { parts.append("TTFT \(Int(t.rounded()))" + L("s", "с")) }
+        if let c = r["cache"] as? Int { parts.append(L("cache", "кэш") + " \(c)%" + ((r["cold"] as? Bool ?? false) ? "❄" : "")) }
+        if let a = r["agents"] as? Int, a > 0 { parts.append(L("agent", "агент") + " \(a)") }
         d.append(text(parts.map { " · " + $0 }.joined(), mono, sec))
         if let e = r["errs"] as? Int, e > 0 { d.append(text(" · ⚠\(e)", mono, .systemRed)) }
         if let wt = r["wait"] as? Int {
-            d.append(text(" · waiting \(wt)s", mono, .systemYellow))
+            d.append(text(" · " + L("waiting \(wt)s", "ждёт \(wt)с"), mono, .systemYellow))
         } else if let ago = r["ago"] as? String {
             d.append(text(" · " + ago, mono, sec))
         }
@@ -957,6 +1105,8 @@ final class NotchView: NSView {
     var onOpen: ((URL) -> Void)?
 
     var onAnswer: ((String, Bool) -> Void)?
+    var onReply: ((String, [String: String]) -> Void)?
+    var onPass: ((String) -> Void)?
     private var holdTimer: Timer?
     static let holdTime = 0.8  // seconds to hold for a destructive command
 
@@ -974,6 +1124,10 @@ final class NotchView: NSView {
                           let app = NSRunningApplication.runningApplications(withBundleIdentifier: host).first {
                     app.activate()  // a terminal session has no deep link: bring its app forward
                 }
+            } else if b.action == "pass" {
+                onPass?(b.id)
+            } else if b.action.hasPrefix("opt:") || b.action == "done" {
+                if let answers = tiles.pick(b.id, b.action) { onReply?(b.id, answers) }
             } else {
                 onAnswer?(b.id, b.action == "allow")
             }
@@ -1415,6 +1569,8 @@ final class NotchController {
     var shrinkWork: DispatchWorkItem?
     var pending: [[String: Any]] = []
     var onAnswer: ((String, Bool) -> Void)?
+    var onReply: ((String, [String: String]) -> Void)?
+    var onPass: ((String) -> Void)?
     private var lastDoc: [String: Any]?
     private var lastAlive: Set<String> = []
     static let logoSize: CGFloat = 16.5
@@ -1441,6 +1597,8 @@ final class NotchController {
             if self?.hovered == true { self?.setHovered(false) }
         }
         island.onAnswer = { [weak self] id, allow in self?.onAnswer?(id, allow) }
+        island.onReply = { [weak self] id, answers in self?.onReply?(id, answers) }
+        island.onPass = { [weak self] id in self?.onPass?(id) }
         setFrame(targetFrame())
         placeAll(animated: false)
         window.orderFrontRegardless()
@@ -1459,6 +1617,15 @@ final class NotchController {
     // open from the island; while not folding away, the window itself counts too (it lags a size change by 0.4 s)
     var openZone: NSRect { (closing ? closedFrame() : closedFrame().union(window.frame)).insetBy(dx: -2, dy: -2) }
 
+    // Mission Control puts a full-screen Dock window on layer 20; the notch must not open (or stay open) under it,
+    // since the window server animates our frame changes there and the ears jump around
+    static func missionControl() -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
+        return list.contains {
+            ($0[kCGWindowOwnerName as String] as? String) == "Dock" && ($0[kCGWindowLayer as String] as? Int) == 20
+        }
+    }
+
     func hover(_ on: Bool) {
         let mouse = NSEvent.mouseLocation
         if on {
@@ -1466,7 +1633,7 @@ final class NotchController {
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.openWork = nil
-                if self.openZone.contains(NSEvent.mouseLocation) { self.setHovered(true) }
+                if self.openZone.contains(NSEvent.mouseLocation) && !NotchController.missionControl() { self.setHovered(true) }
             }
             openWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + NotchController.openDelay, execute: work)
@@ -1487,6 +1654,7 @@ final class NotchController {
         if on {
             hoverCheck = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 guard let self else { return }
+                if NotchController.missionControl() { self.setHovered(false); return }
                 if !self.window.frame.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation) { self.hover(false) }
             }
         }
@@ -1512,15 +1680,36 @@ final class NotchController {
 
     // a new request ticks the trackpad once; the ear shows an amber lock (plus a count) and the logo blinks until it is answered
     func setPending(_ items: [[String: Any]]) {
+        permissionItems = items
+        if let doc = lastDoc { update(doc, alive: lastAlive) } else { applyPending() }
+    }
+
+    private var permissionItems: [[String: Any]] = []
+
+    // Codex questions come with the collector's rows; they can only be answered in Codex, so they are reminders
+    func codexAsks() -> [[String: Any]] {
+        let rows = data["codex"]?["rows"] as? [[String: Any]] ?? []
+        return rows.compactMap { r -> [String: Any]? in
+            guard let a = r["ask"] as? [String: Any], let id = a["id"] as? String,
+                  let qs = a["questions"] as? [[String: Any]], !qs.isEmpty else { return nil }
+            var item: [String: Any] = ["id": "codex-" + id, "src": "codex", "tool": "ask", "state": "chat", "questions": qs,
+                                       "chat": r["chat"] ?? "", "project": r["project"] ?? "", "created": a["created"] ?? 0]
+            if let o = r["open"] as? String { item["open"] = o }
+            return item
+        }
+    }
+
+    private func applyPending() {
+        let items = permissionItems + codexAsks()
         let old = Set(pending.compactMap { $0["id"] as? String })
-        // only a request the notch itself has to answer ticks; one already in the chat doesn't
-        if items.contains(where: { !old.contains($0["id"] as? String ?? "") && $0["state"] as? String != "chat" }) {
+        // a request the notch can answer ticks once, and so does a new Codex question; one already in the chat doesn't
+        if items.contains(where: { !old.contains($0["id"] as? String ?? "")
+            && ($0["state"] as? String != "chat" || $0["src"] as? String == "codex") }) {
             NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
         }
         pending = items
         island.tiles.pending = items
         if items.isEmpty { island.cancelHold() }
-        if let doc = lastDoc { update(doc, alive: lastAlive) }
     }
 
     func asks(_ src: String) -> Int { pending.filter { ($0["src"] as? String) == src }.count }
@@ -1595,9 +1784,10 @@ final class NotchController {
         lastAlive = alive
         let wasRunning = running
         running = providers.map { alive.contains($0.src) }
+        for p in providers { data[p.src] = doc[p.src] as? [String: Any] ?? [:] }
+        applyPending()
         for p in providers {
-            let d = doc[p.src] as? [String: Any] ?? [:]
-            data[p.src] = d
+            let d = data[p.src] ?? [:]
             let n = asks(p.src)
             lines[p.src] = n > 0 ? DotLogo.line(src: p.src, live: true, text: n > 1 ? "🔒\(n)" : "🔒")
                 : DotLogo.line(src: p.src, live: d["live"] as? Bool ?? false, text: d["title"] as? String ?? "⚪")
@@ -1708,6 +1898,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 items = []
                 notch = NotchController(screen: screen)
                 notch?.onAnswer = { [weak self] id, allow in self?.permissions.answer(id, allow: allow) }
+                notch?.onReply = { [weak self] id, answers in self?.permissions.reply(id, answers: answers) }
+                notch?.onPass = { [weak self] id in self?.permissions.handOff(id) }
                 notch?.setPending(permissions.items)
             }
         } else if notch != nil || items.isEmpty {
@@ -1750,6 +1942,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 经 env 找 python3,兼容 Homebrew/pyenv 等非系统安装
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["python3", self.script, "--menu-json"]
+            var env = ProcessInfo.processInfo.environment
+            env["CLAUDE_SPEED_LANG"] = uiRussian ? "ru" : "en"
+            process.environment = env
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
@@ -1769,7 +1964,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.notch?.update(doc, alive: alive)
                     for item in self.items { item.update(doc[item.src] as? [String: Any] ?? [:]) }
                 }
-                self.setAnimating(self.anyLive || !self.permissions.items.isEmpty)
+                self.setAnimating(self.anyLive || !(self.notch?.pending.isEmpty ?? self.permissions.items.isEmpty))
                 self.running = false
                 self.schedule()
             }

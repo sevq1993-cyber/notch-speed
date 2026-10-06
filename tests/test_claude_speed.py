@@ -21,6 +21,8 @@ import time
 import unittest
 from datetime import datetime, timezone
 
+os.environ.pop("CLAUDE_SPEED_LANG", None)  # expectations are in English
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 

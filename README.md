@@ -38,6 +38,8 @@ When Claude Code asks for permission (run a command, edit a file), the request a
 
 With the notch closed, an amber lock in the ear (plus a count) tells you something is waiting.
 
+**Questions, too.** When Claude asks you something (its multiple-choice question dialog), the options show up in the notch as buttons, one question at a time, and your pick goes straight back to Claude. Codex questions appear the same way with an **open chat** button; answer them in Codex and the card goes away.
+
 The notch stays out of the way when it isn't needed:
 
 - If the app hosting that session (Claude desktop, your terminal) is already in front, the prompt goes straight to the chat's own dialog.
@@ -69,6 +71,8 @@ The app reads Claude Code and Codex transcripts locally. The only network call i
 ```
 
 `CLAUDE_SPEED_PERM_TIMEOUT` (seconds, default 30) sets how long the notch waits before handing the prompt back to Claude Code. When the app isn't running, the hook does nothing.
+
+**Language:** English, or Russian when macOS is set to Russian. `CLAUDE_SPEED_LANG=en|ru` overrides it; for the statusline, set it in the `env` block of `~/.claude/settings.json`.
 
 **Update:** `git pull && ./install.sh`. **Uninstall:** `./uninstall.sh`.
 
