@@ -1617,13 +1617,15 @@ final class NotchController {
     // open from the island; while not folding away, the window itself counts too (it lags a size change by 0.4 s)
     var openZone: NSRect { (closing ? closedFrame() : closedFrame().union(window.frame)).insetBy(dx: -2, dy: -2) }
 
-    // Mission Control puts a full-screen Dock window on layer 20; the notch must not open (or stay open) under it,
-    // since the window server animates our frame changes there and the ears jump around
+    // Mission Control shows a full-screen Dock window on layer 20 plus WindowManager's on layer 19; the notch must not
+    // open (or stay open) under it, since the window server animates our frame changes there and the ears jump around.
+    // The Dock window alone is no sign: an auto-hidden Dock shows it too, e.g. while an app bounces for attention.
     static func missionControl() -> Bool {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
-        return list.contains {
-            ($0[kCGWindowOwnerName as String] as? String) == "Dock" && ($0[kCGWindowLayer as String] as? Int) == 20
+        func shown(_ owner: String, _ layer: Int) -> Bool {
+            list.contains { ($0[kCGWindowOwnerName as String] as? String) == owner && ($0[kCGWindowLayer as String] as? Int) == layer }
         }
+        return shown("Dock", 20) && shown("WindowManager", 19)
     }
 
     func hover(_ on: Bool) {
