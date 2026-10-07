@@ -868,7 +868,9 @@ final class TilesView: NSView {
     func ask(_ p: [String: Any], rect: NSRect, col: NSColor) {
         let id = p["id"] as? String ?? ""
         let sec = NSColor.secondaryLabelColor
-        let amber = DotFont.tints["🔒"]!
+        // Codex questions wear its brand: the frame runs blue to violet left to right, the text in their middle
+        let codex = p["src"] as? String == "codex"
+        let amber = codex ? TilesView.brand("codex") : DotFont.tints["🔒"]!
         let box = rect.insetBy(dx: 0, dy: 3)
 
         // the frame: dots clockwise from the top-left corner, lit share = time left
@@ -890,7 +892,8 @@ final class TilesView: NSView {
         while y > y0 { dots.append(NSPoint(x: x0, y: y)); y -= st }
         let lit = Int((Double(dots.count) * share).rounded(.up))
         for (i, pt) in dots.enumerated() {
-            (i < lit ? amber.withAlphaComponent(inChat ? 0.45 : 1) : NSColor.labelColor.withAlphaComponent(0.1)).setFill()
+            let c = codex ? DotLogo.codexFrom.blended(withFraction: (pt.x - x0) / max(1, x1 - x0), of: DotLogo.codexTo) ?? amber : amber
+            (i < lit ? c.withAlphaComponent(inChat ? 0.45 : 1) : NSColor.labelColor.withAlphaComponent(0.1)).setFill()
             NSRect(x: pt.x, y: pt.y, width: d, height: d).fill()
         }
         let inner = box.insetBy(dx: Self.askInset, dy: 0)
@@ -1095,6 +1098,8 @@ final class NotchView: NSView {
     let content = CALayer()
     // a new request, LED-matrix style: amber dots march along the cutout, then the card assembles from dots
     let halo = CAShapeLayer()
+    let haloTint = CAGradientLayer()  // colors the halo through it as a mask: amber, or Codex's blue to violet
+    var accent: [NSColor] = [DotFont.tints["🔒"]!]  // the colors of the next announcement
     let sparks = CALayer()
     private var announceGen = 0
     // a question already waiting in the chat: the cutout grows a strip downwards and an amber LED line runs through it
@@ -1167,13 +1172,17 @@ final class NotchView: NSView {
         content.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
         earsView.layer?.addSublayer(content)
         halo.fillColor = nil
-        halo.strokeColor = DotFont.tints["🔒"]!.cgColor
+        halo.strokeColor = NSColor.white.cgColor
         halo.lineWidth = 2.5
         halo.lineCap = .round
         halo.lineDashPattern = [0, 6]  // round caps on zero-length dashes: a row of LED dots
         halo.opacity = 0
         halo.actions = ["path": NSNull(), "opacity": NSNull()]
-        earsView.layer?.addSublayer(halo)
+        haloTint.mask = halo
+        haloTint.startPoint = CGPoint(x: 0, y: 0.5)
+        haloTint.endPoint = CGPoint(x: 1, y: 0.5)
+        haloTint.actions = ["bounds": NSNull(), "position": NSNull(), "colors": NSNull(), "startPoint": NSNull(), "endPoint": NSNull()]
+        earsView.layer?.addSublayer(haloTint)
         sparks.actions = ["sublayers": NSNull()]
         earsView.layer?.addSublayer(sparks)
         addSubview(earsView)
@@ -1385,6 +1394,13 @@ final class NotchView: NSView {
             guard let self, gen == self.announceGen else { return }
             done()
         }
+        haloTint.frame = bounds
+        halo.frame = haloTint.bounds
+        let cs = accent.count > 1 ? accent : [accent.first ?? .white, accent.first ?? .white]
+        haloTint.colors = cs.map(\.cgColor)
+        let w = max(1, bounds.width)
+        haloTint.startPoint = CGPoint(x: r.minX / w, y: 0.5)
+        haloTint.endPoint = CGPoint(x: r.maxX / w, y: 0.5)
         halo.path = NotchView.notchPath(r, top: t, bottom: NotchView.closedR.bottom + o, closed: false)
         let march = CABasicAnimation(keyPath: "lineDashPhase")
         march.fromValue = 0
@@ -1408,7 +1424,11 @@ final class NotchView: NSView {
     private func sparkle() {
         let r = contentRect, step: CGFloat = 10
         let origin = CGPoint(x: notchX + notch.width / 2, y: bounds.height - notch.height / 2)
-        let color = DotFont.tints["🔒"]!.cgColor
+        let accent = self.accent
+        func color(_ x: CGFloat) -> CGColor {
+            guard accent.count > 1, let a = accent.first, let b = accent.last else { return (accent.first ?? .white).cgColor }
+            return (a.blended(withFraction: (x - r.minX) / max(1, r.width), of: b) ?? a).cgColor
+        }
         let now = CACurrentMediaTime()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1418,7 +1438,7 @@ final class NotchView: NSView {
                 let d = CALayer()
                 d.bounds = CGRect(x: 0, y: 0, width: 3, height: 3)
                 d.cornerRadius = 1.5
-                d.backgroundColor = color
+                d.backgroundColor = color(x)
                 d.position = CGPoint(x: x, y: y)
                 d.opacity = 0
                 let fly = CABasicAnimation(keyPath: "position")
@@ -1468,7 +1488,7 @@ final class NotchView: NSView {
     }
 
     // slide the strip out and run `text()` through it once, again while `loop()` holds; then fold it and call `done`
-    func showTicker(_ text: @escaping () -> String, loop: @escaping () -> Bool, done: @escaping () -> Void) {
+    func showTicker(_ text: @escaping () -> (String, [NSColor]), loop: @escaping () -> Bool, done: @escaping () -> Void) {
         tickerGen += 1
         let gen = tickerGen
         tickerOut = true
@@ -1492,10 +1512,11 @@ final class NotchView: NSView {
         }
     }
 
-    private func runTicker(_ gen: Int, _ text: @escaping () -> String, loop: @escaping () -> Bool, done: @escaping () -> Void) {
-        let s = text(), cell: CGFloat = 1.5, h = 7 * cell
+    // `text` gives the line and its colors, a left-to-right gradient when there are several
+    private func runTicker(_ gen: Int, _ text: @escaping () -> (String, [NSColor]), loop: @escaping () -> Bool,
+                           done: @escaping () -> Void) {
+        let (s, colors) = text(), cell: CGFloat = 1.5, h = 7 * cell
         let w = DotFont.width(s, cell: cell), clipW = tickerClip.bounds.width
-        let color = DotFont.tints["🔒"]!
         let next = { [weak self] in
             guard let self, gen == self.tickerGen else { return }
             if loop() { self.runTicker(gen, text, loop: loop, done: done) } else { self.foldTicker(done) }
@@ -1503,8 +1524,13 @@ final class NotchView: NSView {
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        tickerText.contents = NSImage(size: NSSize(width: w, height: h), flipped: true) { _ in
-            DotFont.draw(s, at: .zero, cell: cell, color: color)
+        tickerText.contents = NSImage(size: NSSize(width: w, height: h), flipped: true) { rect in
+            DotFont.draw(s, at: .zero, cell: cell, color: colors.first ?? .white)
+            if colors.count > 1, let ctx = NSGraphicsContext.current?.cgContext,
+               let g = CGGradient(colorsSpace: nil, colors: colors.map(\.cgColor) as CFArray, locations: nil) {
+                ctx.setBlendMode(.sourceAtop)  // tint the dots only
+                ctx.drawLinearGradient(g, start: CGPoint(x: rect.minX, y: 0), end: CGPoint(x: rect.maxX, y: 0), options: [])
+            }
             return true
         }
         tickerText.bounds = CGRect(x: 0, y: 0, width: w, height: h)
@@ -1961,7 +1987,7 @@ final class NotchController {
     static let peekTime = 7.0
     // questions already in the Claude chat open no card; the strip under the cutout reminds of them instead:
     // a pass every chatEvery seconds, and after chatStick it stays out, counting, until they are answered
-    private var chatSeen: [String: Date] = [:]
+    private var chatSeen: [String: (at: Date, src: String)] = [:]
     private var chatNext = Date.distantPast
     private var tickerUp = false  // the window has room for the strip
     static let chatEvery = 30.0
@@ -2101,23 +2127,35 @@ final class NotchController {
     private func applyPending() {
         let items = permissionItems + codexAsks()
         let old = Set(pending.compactMap { $0["id"] as? String })
-        // a request the notch can answer ticks once, and so does a new Codex question; one already in the chat doesn't
-        if items.contains(where: { !old.contains($0["id"] as? String ?? "")
-            && ($0["state"] as? String != "chat" || $0["src"] as? String == "codex") }) {
+        // a request the notch can answer ticks once and opens the card, and so does a new Codex question unless
+        // Codex is in front; one already in front of the user's eyes in its chat only gets the strip
+        let codexFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == NotchController.codexApp
+        let fresh = items.filter { !old.contains($0["id"] as? String ?? "")
+            && ($0["state"] as? String != "chat" || ($0["src"] as? String == "codex" && !codexFront)) }
+        let announce = !fresh.isEmpty
+        if announce {
+            // Codex's own colors when only Codex asks
+            island.accent = fresh.allSatisfy { $0["src"] as? String == "codex" }
+                ? [DotLogo.codexFrom, DotLogo.codexTo] : [DotFont.tints["🔒"]!]
             NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
             DispatchQueue.main.async { [weak self] in self?.peek() }  // after this update has laid out
         }
         pending = items
         island.tiles.pending = items
         if items.isEmpty { island.cancelHold() }
-        let chat = items.filter { $0["state"] as? String == "chat" && $0["src"] as? String != "codex" }
-            .compactMap { $0["id"] as? String }
+        // every question waiting in a chat (Codex ones only ever are) gets the strip until it is answered
+        let chat = items.filter { $0["state"] as? String == "chat" }
+            .compactMap { r in (r["id"] as? String).map { ($0, r["src"] as? String ?? "claude") } }
         if chatSeen.isEmpty, !chat.isEmpty { chatNext = .distantPast }  // the first question runs at once
-        chatSeen = chat.reduce(into: [:]) { $0[$1] = chatSeen[$1] ?? Date() }
+        chatSeen = chat.reduce(into: [:]) { $0[$1.0] = chatSeen[$1.0] ?? (Date(), $1.1) }
+        if announce { chatNext = Date() + NotchController.chatEvery }  // the card has just shown it
         if chatSeen.isEmpty, tickerUp { island.foldTicker { [weak self] in self?.tickerDown() } }
     }
 
-    private var chatWait: TimeInterval? { chatSeen.values.min().map { Date().timeIntervalSince($0) } }
+    static let codexApp = "com.openai.codex"  // the Codex desktop app (named ChatGPT)
+
+    private var chatOldest: (at: Date, src: String)? { chatSeen.values.min { $0.at < $1.at } }
+    private var chatWait: TimeInterval? { chatOldest.map { Date().timeIntervalSince($0.at) } }
 
     // called on every animation tick while anything is pending
     private func remind() {
@@ -2128,11 +2166,13 @@ final class NotchController {
         tickerUp = true
         setFrame(targetFrame())  // room for the strip first
         island.showTicker({ [weak self] in
-            guard let wait = self?.chatWait else { return "" }
-            let s = Int(wait)
-            return wait >= NotchController.chatStick
+            guard let oldest = self?.chatOldest else { return ("", []) }
+            let wait = Date().timeIntervalSince(oldest.at), s = Int(wait)
+            // the brand of whoever has waited longest: Codex in its blue-violet gradient, Claude in the lock's amber
+            let colors = oldest.src == "codex" ? [DotLogo.codexFrom, DotLogo.codexTo] : [DotFont.tints["🔒"]!]
+            return (wait >= NotchController.chatStick
                 ? L("CHECK THE CHAT · WAITING ", "ВОПРОС В ЧАТЕ · ЖДЁТ ") + String(format: "%d:%02d", s / 60, s % 60)
-                : L("CHECK THE CHAT · REPLY", "ВОПРОС В ЧАТЕ · ОТВЕТЬ")
+                : L("CHECK THE CHAT · REPLY", "ВОПРОС В ЧАТЕ · ОТВЕТЬ"), colors)
         }, loop: { [weak self] in
             guard let self, let wait = self.chatWait else { return false }
             return wait >= NotchController.chatStick && self.tickerUp

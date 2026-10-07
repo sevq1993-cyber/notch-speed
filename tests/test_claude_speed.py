@@ -853,6 +853,18 @@ class TestCollectMain(unittest.TestCase):
         self.write("-Users-x-proj-b", [rec_u(self.now - 8), rec_a("m2", self.now - 2, 300)])
         self.assertFalse(self.menu()["claude"].get("think"))
 
+    def test_menu_thinks_through_tool_calls_with_no_speed_yet(self):
+        # a fresh turn busy with tool calls: output keeps coming, but too little for a speed, so the ear would be blank
+        self.write("-Users-x-proj-a", [
+            rec_u(self.now - 20),
+            {"type": "assistant", "timestamp": iso(self.now - 3),
+             "message": {"id": "m1", "model": "claude-fable-5", "stop_reason": "tool_use",
+                         "content": [{"type": "tool_use", "name": "Bash"}], "usage": {"output_tokens": 30}}}])
+        claude = self.menu()["claude"]
+        self.assertTrue(claude.get("live"))
+        self.assertIsNone(claude["rows"][0]["tps"])
+        self.assertTrue(claude.get("think"))
+
     def test_idle_empty_root(self):
         out = self.run_main()
         self.assertIn("⚪", out.splitlines()[0])

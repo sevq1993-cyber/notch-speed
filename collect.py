@@ -1717,13 +1717,13 @@ def menu_json(rows, now, sources=("claude", "codex")):
         rs = sorted((r for r in rows if r.get("src") == src),
                     key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
         items = []
-        thinking = []  # (turn key) of sessions in an open turn with no fresh output
+        thinking = []  # (turn key) of sessions in an open turn
         generating = False
         for r in rs:
             fit, g = r["fit"], r["last"]
             gen = bool(r["agents"][0] or now - r["end"] < ACTIVE_WINDOW)
             generating = generating or gen
-            if r.get("busy") and not gen:
+            if r.get("busy"):
                 thinking.append(r.get("turn"))
             cache = cold = None
             if g:
@@ -1761,8 +1761,10 @@ def menu_json(rows, now, sources=("claude", "codex")):
         limits = claude_limits(now) if src == "claude" else codex_limits(now) if src == "codex" else []
         out[src] = {"title": title_text(rs, now), "live": any(it["live"] for it in items), "rows": items,
                     "limits": limits, "today": today.get(src)}
-        # the ear shows "thinking" only while nothing of this provider is producing output
-        if thinking and not generating:
+        # the ear shows "thinking" while a turn is open and there is no live speed to show instead: nothing of this
+        # provider is producing output, or what it produces (tool calls between reasoning) has no speed yet
+        speed = any(it["live"] and it["tps"] is not None for it in items)
+        if thinking and not (generating and speed):
             out[src]["think"] = True
             out[src]["turn"] = str(thinking[0])
     return json.dumps(out, ensure_ascii=False)
