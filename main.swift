@@ -80,7 +80,31 @@ enum DotLogo {
     }
 
     struct Line {
-        var src = "", live = false, text = "", tps: Double? = nil
+        var src = "", live = false, text = "", tps: Double? = nil, think = false
+    }
+
+    // "thinking": the logo glows at half strength while single dots flash at random, like firing neurons.
+    // One 3 s loop at 10 frames per second, so the frames are cached like the drawing animation.
+    static let neuronFrames = 30
+
+    static func neurons(_ src: String, size: CGFloat, frame: Int) -> NSImage? {
+        guard let rows = patterns[src], let order = dots[src] else { return nil }
+        let key = "\(src)/\(size)/neuron/\(frame)"
+        if let img = cache[key] { return img }
+        let n = rows.count, cell = size / CGFloat(n), px = cell * 2 / 3
+        let t = Double(frame) / 10 * 2.6 / 3  // each dot flashes once per loop, at its own moment
+        let img = NSImage(size: NSSize(width: size, height: size), flipped: true) { _ in
+            for p in order {
+                let seed = Double((p.0 * 73_856_093 ^ p.1 * 19_349_663) % 1000) / 1000 * 2.6
+                let k = (t + seed).truncatingRemainder(dividingBy: 2.6)
+                let flash = k < 0.35 ? 1 - abs(k / 0.35 * 2 - 1) : 0
+                color(src, x: p.0, y: p.1, n: n).withAlphaComponent(0.45 + 0.55 * flash).setFill()
+                NSRect(x: CGFloat(p.0) * cell, y: CGFloat(p.1) * cell, width: px, height: px).fill()
+            }
+            return true
+        }
+        cache[key] = img
+        return img
     }
 
     // tps is the number right after the speed lamp (≈/≥ allowed)
@@ -148,8 +172,34 @@ enum DotFont {
         "Ч": ["#...#", "#...#", "#...#", ".####", "....#", "....#", "....#"],
         "Н": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
         "Е": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
-        "Д": [".###.", ".#.#.", ".#.#.", ".#.#.", "#####", "#...#", "#...#"],
+        "Д": ["..##.", ".#.#.", ".#.#.", ".#.#.", ".#.#.", "#####", "#...#"],
         "М": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+        // the rest of the capitals the "thinking" words need (А В К О Р С Т Х look like their Latin twins)
+        "А": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+        "Б": ["#####", "#....", "#....", "####.", "#...#", "#...#", "####."],
+        "В": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+        "Г": ["#####", "#....", "#....", "#....", "#....", "#....", "#...."],
+        "Ж": ["#.#.#", "#.#.#", ".###.", "..#..", ".###.", "#.#.#", "#.#.#"],
+        "З": [".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."],
+        "И": ["#...#", "#...#", "#..##", "#.#.#", "##..#", "#...#", "#...#"],
+        "К": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+        "Л": ["..###", ".#..#", ".#..#", ".#..#", ".#..#", ".#..#", "#...#"],
+        "О": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+        "П": ["#####", "#...#", "#...#", "#...#", "#...#", "#...#", "#...#"],
+        "Р": ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+        "С": [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+        "Т": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+        "У": ["#...#", "#...#", "#...#", ".#.##", "..#.#", "...#.", "##..."],
+        "Ф": ["..#..", ".###.", "#.#.#", "#.#.#", "#.#.#", ".###.", "..#.."],
+        "Х": ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+        "Ш": ["#...#", "#...#", "#.#.#", "#.#.#", "#.#.#", "#.#.#", "#####"],
+        "Ы": ["#...#", "#...#", "#...#", "##..#", "#.#.#", "#.#.#", "##..#"],
+        "Я": [".####", "#...#", "#...#", ".####", "..#.#", ".#..#", "#...#"],
+        // the chat reminder strip
+        "Ь": ["#....", "#....", "#....", "####.", "#...#", "#...#", "####."],
+        "Ё": [".#.#.", "#####", "#....", "####.", "#....", "#....", "#####"],
+        ":": [".", ".", "#", ".", "#", ".", "."],
+        "·": [".", ".", ".", "#", ".", ".", "."],
         "🔒": [".###.", "#...#", "#...#", "#####", "##.##", "##.##", "#####"],
         "✓": ["......#", ".....##", "#...##.", "##.##..", ".###...", "..#....", "......."],
         "✕": ["#.....#", ".#...#.", "..#.#..", "...#...", "..#.#..", ".#...#.", "#.....#"],
@@ -184,7 +234,7 @@ enum DotFont {
     static func cachedTitle(_ l: DotLogo.Line, size: CGFloat, phase: Double, dark: Bool) -> NSImage {
         let steps = 2 * (DotLogo.dots[l.src]?.count ?? 1)
         let step = phase < 0 ? -1 : Int(phase * Double(steps))
-        let id = "\(l.src)|\(l.live)|\(l.text)|\(dark)|\(step)"
+        let id = "\(l.src)|\(l.live)|\(l.think)|\(l.text)|\(dark)|\(step)"
         if frames.count > 600 { frames = [:] }
         if let img = frames[id] { return img }
         let vec = title(l, size: size, phase: step < 0 ? -1 : Double(step) / Double(steps))
@@ -231,7 +281,7 @@ enum DotFont {
             }
             let top = (rows - 7) / 2
             for (g, gx) in cols {
-                (tints[g] ?? .labelColor).setFill()
+                (tints[g] ?? (l.think ? .white : .labelColor)).setFill()  // think text pulses via layer opacity
                 for (y, row) in glyphs[g]!.enumerated() {
                     for (cx, ch) in row.enumerated() where ch == "#" {
                         NSRect(x: CGFloat(gx + cx) * cell, y: CGFloat(top + y) * cell, width: px, height: px).fill()
@@ -352,6 +402,13 @@ func sessionCount(_ n: Int) -> String {
 }
 
 let providers: [(src: String, name: String)] = [("claude", "Claude"), ("codex", "Codex")]
+
+// shown beside the logo while a model thinks; a new turn draws another word
+let thinkWords = uiRussian
+    ? ["шуршит", "варит", "пыхтит", "копается", "мастерит", "стряпает", "жужжит", "возится", "ковыряет", "строгает",
+       "колдует", "шаманит", "ворожит", "гадает", "медитирует", "камлает", "бормочет", "чародеит", "кумекает",
+       "мудрит", "смекает", "чудит", "фантазит", "бредит", "витает", "соображает", "тужится", "извилит"]
+    : ["thinking", "pondering", "brewing", "tinkering", "mulling", "scheming", "musing", "noodling"]
 
 // which providers have a process alive (desktop app or CLI); libproc keeps this in-process and cheap
 enum Running {
@@ -1036,6 +1093,21 @@ final class NotchView: NSView {
     // boring.notch-style panel: a black notch-shaped layer that springs open from the physical notch
     let panel = CAShapeLayer()
     let content = CALayer()
+    // a new request, LED-matrix style: amber dots march along the cutout, then the card assembles from dots
+    let halo = CAShapeLayer()
+    let sparks = CALayer()
+    private var announceGen = 0
+    // a question already waiting in the chat: the cutout grows a strip downwards and an amber LED line runs through it
+    let ticker = CAShapeLayer()
+    let tickerClip = CALayer()
+    let tickerText = CALayer()
+    private(set) var tickerOut = false
+    private var tickerHanding = false  // released for the card; its shape and line wait for the grown window
+    private var tickerGen = 0
+    static let tickerH: CGFloat = 16
+    static let tickerPad: CGFloat = 12  // the strip reaches this far past the ears
+    static let tickerInset: CGFloat = 4  // window room for its spring overshoot
+    private var tickerSpan: (l: CGFloat, r: CGFloat) = (0, 0)  // its reach past the cutout, each side
     // per side: logo layer and speed-text layer
     let logos = [CALayer(), CALayer()]
     let texts = [CALayer(), CALayer()]
@@ -1071,6 +1143,18 @@ final class NotchView: NSView {
         panel.opacity = 0
         panel.actions = ["path": NSNull(), "opacity": NSNull()]
         earsView.layer?.addSublayer(panel)
+        ticker.fillColor = NSColor.black.cgColor
+        ticker.opacity = 0
+        ticker.actions = ["path": NSNull(), "opacity": NSNull()]
+        tickerClip.masksToBounds = true
+        tickerClip.opacity = 0
+        tickerClip.actions = ["bounds": NSNull(), "position": NSNull(), "opacity": NSNull()]
+        tickerText.contentsScale = 2
+        tickerText.anchorPoint = .zero
+        tickerText.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        tickerClip.addSublayer(tickerText)
+        earsView.layer?.addSublayer(ticker)
+        earsView.layer?.addSublayer(tickerClip)  // its own layer: the line outlives the strip while the card takes over
         for l in logos + texts + meterLabels {
             l.contentsScale = 2
             l.actions = ["contents": NSNull(), "bounds": NSNull()]
@@ -1082,6 +1166,16 @@ final class NotchView: NSView {
         content.opacity = 0
         content.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
         earsView.layer?.addSublayer(content)
+        halo.fillColor = nil
+        halo.strokeColor = DotFont.tints["🔒"]!.cgColor
+        halo.lineWidth = 2.5
+        halo.lineCap = .round
+        halo.lineDashPattern = [0, 6]  // round caps on zero-length dashes: a row of LED dots
+        halo.opacity = 0
+        halo.actions = ["path": NSNull(), "opacity": NSNull()]
+        earsView.layer?.addSublayer(halo)
+        sparks.actions = ["sublayers": NSNull()]
+        earsView.layer?.addSublayer(sparks)
         addSubview(earsView)
     }
 
@@ -1194,6 +1288,14 @@ final class NotchView: NSView {
     override func layout() {
         super.layout()
         earsView.frame = bounds
+        if tickerOut, ticker.animation(forKey: "path") == nil {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            measureTicker()
+            ticker.path = tickerPath(true)
+            placeTicker()
+            CATransaction.commit()
+        }
         guard !animating else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1208,7 +1310,7 @@ final class NotchView: NSView {
     }
 
     // NotchShape from DynamicNotchKit/boring.notch: concave top shoulders, rounded bottom corners (layer coords, y up)
-    static func notchPath(_ r: NSRect, top t: CGFloat, bottom b: CGFloat) -> CGPath {
+    static func notchPath(_ r: NSRect, top t: CGFloat, bottom b: CGFloat, closed: Bool = true) -> CGPath {
         let p = CGMutablePath()
         p.move(to: CGPoint(x: r.minX, y: r.maxY))
         p.addQuadCurve(to: CGPoint(x: r.minX + t, y: r.maxY - t), control: CGPoint(x: r.minX + t, y: r.maxY))
@@ -1218,7 +1320,7 @@ final class NotchView: NSView {
         p.addQuadCurve(to: CGPoint(x: r.maxX - t, y: r.minY + b), control: CGPoint(x: r.maxX - t, y: r.minY))
         p.addLine(to: CGPoint(x: r.maxX - t, y: r.maxY - t))
         p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY), control: CGPoint(x: r.maxX - t, y: r.maxY))
-        p.closeSubpath()
+        if closed { p.closeSubpath() }
         return p
     }
 
@@ -1269,6 +1371,240 @@ final class NotchView: NSView {
         CATransaction.commit()
     }
 
+    // the closed cutout's outline, a few points out so the dots fall on real pixels below it; then `done`
+    func announce(_ done: @escaping () -> Void) {
+        announceGen += 1
+        let gen = announceGen
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return done() }
+        let t = NotchView.closedR.top, o: CGFloat = 3
+        let r = NSRect(x: notchX - t - o, y: bounds.height - notch.height - o,
+                       width: notch.width + 2 * (t + o), height: notch.height + o)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            guard let self, gen == self.announceGen else { return }
+            done()
+        }
+        halo.path = NotchView.notchPath(r, top: t, bottom: NotchView.closedR.bottom + o, closed: false)
+        let march = CABasicAnimation(keyPath: "lineDashPhase")
+        march.fromValue = 0
+        march.toValue = -24
+        let blink = CAKeyframeAnimation(keyPath: "opacity")
+        blink.values = [0, 1, 0.35, 1, 0.35, 1, 0]
+        let group = CAAnimationGroup()
+        group.animations = [march, blink]
+        group.duration = 1.0
+        halo.add(group, forKey: "announce")
+        CATransaction.commit()
+    }
+
+    func cancelAnnounce() {
+        announceGen += 1
+        halo.removeAllAnimations()
+        sparks.sublayers = nil
+    }
+
+    // amber dots fly out of the notch to a grid over the top of the card and fade as the card fades in
+    private func sparkle() {
+        let r = contentRect, step: CGFloat = 10
+        let origin = CGPoint(x: notchX + notch.width / 2, y: bounds.height - notch.height / 2)
+        let color = DotFont.tints["🔒"]!.cgColor
+        let now = CACurrentMediaTime()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        var dots: [CALayer] = []
+        for y in stride(from: r.maxY - 5, to: max(r.minY, r.maxY - 240), by: -step) {
+            for x in stride(from: r.minX + 5, to: r.maxX - 4, by: step) {
+                let d = CALayer()
+                d.bounds = CGRect(x: 0, y: 0, width: 3, height: 3)
+                d.cornerRadius = 1.5
+                d.backgroundColor = color
+                d.position = CGPoint(x: x, y: y)
+                d.opacity = 0
+                let fly = CABasicAnimation(keyPath: "position")
+                fly.fromValue = origin
+                fly.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+                let fade = CAKeyframeAnimation(keyPath: "opacity")
+                fade.values = [0, 1, 1, 0]
+                fade.keyTimes = [0, 0.3, 0.75, 1]
+                let g = CAAnimationGroup()
+                g.animations = [fly, fade]
+                g.duration = 0.6
+                g.beginTime = now + Double(hypot(x - origin.x, y - origin.y)) * 0.0012 + Double.random(in: 0...0.15)
+                g.fillMode = .backwards
+                d.add(g, forKey: "fly")
+                dots.append(d)
+            }
+        }
+        sparks.sublayers = dots
+        CATransaction.commit()
+        let gen = announceGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+            guard let self, gen == self.announceGen else { return }
+            self.sparks.sublayers = nil
+        }
+    }
+
+    // the window is sized for the strip while it is out; its reach is kept relative to the cutout, so the card
+    // can still spring open from it after the window has grown
+    private func measureTicker() {
+        let i = NotchView.tickerInset
+        tickerSpan = (notchX - i, bounds.width - i - notchX - notch.width)
+    }
+
+    // out: one black island under both ears and the cutout, a strip deeper; in: just the cutout
+    private func tickerPath(_ out: Bool) -> CGPath {
+        let t = NotchView.closedR.top, h = NotchView.tickerH
+        let r = out ? NSRect(x: notchX - tickerSpan.l, y: bounds.height - notch.height - h,
+                             width: notch.width + tickerSpan.l + tickerSpan.r, height: notch.height + h)
+            : NSRect(x: notchX - t, y: bounds.height - notch.height, width: notch.width + 2 * t, height: notch.height)
+        return NotchView.notchPath(r, top: t, bottom: NotchView.closedR.bottom)
+    }
+
+    private func placeTicker() {
+        let inset = NotchView.closedR.top + NotchView.closedR.bottom  // clear of the rounded corners
+        tickerClip.frame = CGRect(x: notchX - tickerSpan.l + inset, y: bounds.height - notch.height - NotchView.tickerH,
+                                  width: max(0, notch.width + tickerSpan.l + tickerSpan.r - 2 * inset), height: NotchView.tickerH)
+    }
+
+    // slide the strip out and run `text()` through it once, again while `loop()` holds; then fold it and call `done`
+    func showTicker(_ text: @escaping () -> String, loop: @escaping () -> Bool, done: @escaping () -> Void) {
+        tickerGen += 1
+        let gen = tickerGen
+        tickerOut = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tickerHanding = false
+        measureTicker()
+        placeTicker()
+        tickerText.contents = nil
+        tickerClip.removeAllAnimations()
+        tickerClip.opacity = 1
+        ticker.opacity = 1
+        let to = tickerPath(true)
+        ticker.removeAllAnimations()
+        ticker.add(NotchView.spring("path", from: tickerPath(false), to: to, response: 0.42, damping: 0.75), forKey: "path")
+        ticker.path = to
+        CATransaction.commit()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, gen == self.tickerGen else { return }
+            self.runTicker(gen, text, loop: loop, done: done)
+        }
+    }
+
+    private func runTicker(_ gen: Int, _ text: @escaping () -> String, loop: @escaping () -> Bool, done: @escaping () -> Void) {
+        let s = text(), cell: CGFloat = 1.5, h = 7 * cell
+        let w = DotFont.width(s, cell: cell), clipW = tickerClip.bounds.width
+        let color = DotFont.tints["🔒"]!
+        let next = { [weak self] in
+            guard let self, gen == self.tickerGen else { return }
+            if loop() { self.runTicker(gen, text, loop: loop, done: done) } else { self.foldTicker(done) }
+        }
+        let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tickerText.contents = NSImage(size: NSSize(width: w, height: h), flipped: true) { _ in
+            DotFont.draw(s, at: .zero, cell: cell, color: color)
+            return true
+        }
+        tickerText.bounds = CGRect(x: 0, y: 0, width: w, height: h)
+        tickerText.position = CGPoint(x: still ? 0 : -w, y: ((NotchView.tickerH - h) / 2).rounded())
+        if !still {
+            CATransaction.setCompletionBlock(next)
+            let a = CABasicAnimation(keyPath: "position.x")
+            a.fromValue = clipW
+            a.toValue = -w
+            a.duration = Double(clipW + w) / 50  // points per second
+            tickerText.add(a, forKey: "run")
+        }
+        CATransaction.commit()
+        if still { DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: next) }
+    }
+
+    func foldTicker(_ done: (() -> Void)? = nil) {
+        guard tickerOut else { return }
+        tickerGen += 1
+        let gen = tickerGen
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            guard let self, gen == self.tickerGen else { return }
+            self.ticker.opacity = 0
+            self.tickerClip.opacity = 0
+            self.tickerOut = false
+            done?()
+        }
+        tickerText.removeAllAnimations()
+        tickerText.contents = nil
+        let a = CABasicAnimation(keyPath: "path")
+        a.fromValue = ticker.presentation()?.path ?? ticker.path
+        a.toValue = tickerPath(false)
+        a.duration = 0.3
+        a.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+        ticker.removeAllAnimations()
+        ticker.add(a, forKey: "path")
+        ticker.path = tickerPath(false)
+        CATransaction.commit()
+    }
+
+    // the card takes over, step 1, before the window grows: the strip stays on screen but stops following resizes
+    func releaseTicker() {
+        guard tickerOut else { return }
+        tickerGen += 1
+        tickerOut = false
+        tickerHanding = true
+    }
+
+    // step 2, in the grown window: returns the strip's shape for the panel to spring open from, while the running
+    // line keeps running and drifts down into the card, fading as the card fades in
+    func handOffTicker() -> CGPath? {
+        guard tickerHanding else { return nil }
+        tickerHanding = false
+        let gen = tickerGen, path = tickerPath(true)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            guard let self, gen == self.tickerGen else { return }
+            self.tickerText.removeAllAnimations()
+            self.tickerText.contents = nil
+        }
+        ticker.removeAllAnimations()
+        ticker.opacity = 0
+        placeTicker()
+        let y = tickerClip.position.y
+        let drift = CABasicAnimation(keyPath: "position.y")
+        drift.fromValue = y
+        drift.toValue = y - 40
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        let group = CAAnimationGroup()
+        group.animations = [drift, fade]
+        group.duration = 0.4
+        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1)
+        tickerClip.add(group, forKey: "handoff")
+        tickerClip.position.y = y - 40
+        tickerClip.opacity = 0
+        CATransaction.commit()
+        return path
+    }
+
+    // at once, e.g. a reveal opens the card over it
+    func hideTicker() {
+        guard tickerOut || tickerHanding else { return }
+        tickerGen += 1
+        tickerOut = false
+        tickerHanding = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ticker.removeAllAnimations()
+        tickerText.removeAllAnimations()
+        tickerText.contents = nil
+        ticker.opacity = 0
+        tickerClip.opacity = 0
+        CATransaction.commit()
+    }
+
     // SwiftUI .spring(response:dampingFraction:) expressed as a CASpringAnimation
     static func spring(_ key: String, from: Any?, to: Any?, response: Double, damping: Double) -> CASpringAnimation {
         let a = CASpringAnimation(keyPath: key)
@@ -1281,13 +1617,14 @@ final class NotchView: NSView {
         return a
     }
 
-    func setExpanded(_ on: Bool, completion: (() -> Void)? = nil) {
+    func setExpanded(_ on: Bool, reveal: Bool = false, from start: CGPath? = nil, completion: (() -> Void)? = nil) {
         guard on != expanded else { return }
+        if !on { cancelAnnounce() }
         expanded = on
         generation += 1
         let gen = generation
         animating = true
-        let from = panel.presentation()?.path ?? panel.path ?? closedPath
+        let from = start ?? panel.presentation()?.path ?? panel.path ?? closedPath
         let to = on ? openPath : closedPath
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1321,6 +1658,8 @@ final class NotchView: NSView {
             layoutMeters(i, open: on, animated: .spring, closedFrom: from)
         }
         if on { tiles.hoverRow = nil; tiles.hoverButton = nil; renderContent() }
+        let reveal = reveal && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if on && reveal { sparkle() }
         // content: scale 0.8 → 1 from the top plus fade, like boring.notch's .scale(0.8, anchor: .top)
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = content.presentation()?.opacity ?? content.opacity
@@ -1331,7 +1670,7 @@ final class NotchView: NSView {
         let group = CAAnimationGroup()
         group.animations = [fade, scale]
         group.duration = on ? 0.35 : 0.18
-        group.beginTime = CACurrentMediaTime() + (on ? 0.05 : 0)
+        group.beginTime = CACurrentMediaTime() + (on ? (reveal ? 0.6 : 0.05) : 0)
         group.fillMode = .backwards
         group.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1)
         content.removeAnimation(forKey: "show")
@@ -1573,6 +1912,8 @@ final class NotchController {
     var onReply: ((String, [String: String]) -> Void)?
     var onPass: ((String) -> Void)?
     private var lastDoc: [String: Any]?
+    private var thinkTurn: [String: String] = [:]  // provider → turn its word was drawn for
+    private var thinkWord: [String: String] = [:]
     private var lastAlive: Set<String> = []
     static let logoSize: CGFloat = 16.5
 
@@ -1613,6 +1954,18 @@ final class NotchController {
     var hoverCheck: Timer?
 
     var openWork: DispatchWorkItem?
+    // a new request opens the card by itself; it folds again unless the cursor comes over within peekTime
+    var peeking = false
+    var peekWork: DispatchWorkItem?
+    var peekMouse = NSPoint.zero  // a cursor already resting in the card's area doesn't count until it moves
+    static let peekTime = 7.0
+    // questions already in the Claude chat open no card; the strip under the cutout reminds of them instead:
+    // a pass every chatEvery seconds, and after chatStick it stays out, counting, until they are answered
+    private var chatSeen: [String: Date] = [:]
+    private var chatNext = Date.distantPast
+    private var tickerUp = false  // the window has room for the strip
+    static let chatEvery = 30.0
+    static let chatStick = 120.0
     static let openDelay = 0.15  // dwell before opening, so a cursor passing by the notch doesn't pop the panel
 
     // open from the island; while not folding away, the window itself counts too (it lags a size change by 0.4 s)
@@ -1642,15 +1995,34 @@ final class NotchController {
             DispatchQueue.main.asyncAfter(deadline: .now() + NotchController.openDelay, execute: work)
         } else {
             // resizing the window rebuilds the tracking area and can fire a spurious exit; trust the cursor instead
-            if window.frame.insetBy(dx: -2, dy: -2).contains(mouse) { return }
+            if peeking || window.frame.insetBy(dx: -2, dy: -2).contains(mouse) { return }
             openWork?.cancel()
             openWork = nil
             if hovered { setHovered(false) }
         }
     }
 
-    func setHovered(_ on: Bool) {
+    func peek() {
+        guard !hovered, !closing, !island.animating, !NotchController.missionControl() else { return }
+        peeking = true
+        peekMouse = NSEvent.mouseLocation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.peeking else { return }
+            self.setHovered(false)
+        }
+        peekWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + NotchController.peekTime, execute: work)
+        setHovered(true, reveal: true)
+    }
+
+    func setHovered(_ on: Bool, reveal: Bool = false) {
+        let quiet = reveal || (!on && peeking)  // the request itself ticked; folding an unvisited card stays silent
         hovered = on
+        if !on || !reveal {
+            peeking = false
+            peekWork?.cancel()
+            peekWork = nil
+        }
         // tracking areas can miss the exit while the window resizes; poll the cursor only while open
         hoverCheck?.invalidate()
         hoverCheck = nil
@@ -1658,18 +2030,42 @@ final class NotchController {
             hoverCheck = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 if NotchController.missionControl() { self.setHovered(false); return }
-                if !self.window.frame.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation) { self.hover(false) }
+                let inside = self.window.frame.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
+                if self.peeking {
+                    // the cursor came over the card: from now on it is an ordinary hover
+                    if inside && NSEvent.mouseLocation != self.peekMouse {
+                        self.peeking = false
+                        self.peekWork?.cancel()
+                        self.peekWork = nil
+                    }
+                    return
+                }
+                if !inside { self.hover(false) }
             }
         }
         // a light tick on Force Touch trackpads on open and close, like boring.notch; silent elsewhere
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        if !quiet { NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now) }
         if on {
             closing = false
+            if tickerUp { island.releaseTicker(); tickerUp = false }
             // fresh rows first: the window height is computed from them
             island.tiles.today = todayBySrc
             island.tiles.sections = sections()
             setFrame(targetFrame())  // grow the transparent window first, then spring the panel open inside it
-            island.setExpanded(true)
+            let strip = island.handOffTicker()  // the card grows out of the strip instead of the bare cutout
+            if reveal {
+                island.announce { [weak self] in
+                    guard let self, self.hovered else { return }
+                    self.island.setExpanded(true, reveal: true)
+                }
+            } else {
+                island.setExpanded(true, from: strip)
+            }
+        } else if !island.expanded {
+            // folded before the announcement finished opening the card
+            island.cancelAnnounce()
+            closing = false
+            setFrame(targetFrame())
         } else {
             // keep the window large until the card has folded back into the notch
             closing = true
@@ -1709,10 +2105,44 @@ final class NotchController {
         if items.contains(where: { !old.contains($0["id"] as? String ?? "")
             && ($0["state"] as? String != "chat" || $0["src"] as? String == "codex") }) {
             NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+            DispatchQueue.main.async { [weak self] in self?.peek() }  // after this update has laid out
         }
         pending = items
         island.tiles.pending = items
         if items.isEmpty { island.cancelHold() }
+        let chat = items.filter { $0["state"] as? String == "chat" && $0["src"] as? String != "codex" }
+            .compactMap { $0["id"] as? String }
+        if chatSeen.isEmpty, !chat.isEmpty { chatNext = .distantPast }  // the first question runs at once
+        chatSeen = chat.reduce(into: [:]) { $0[$1] = chatSeen[$1] ?? Date() }
+        if chatSeen.isEmpty, tickerUp { island.foldTicker { [weak self] in self?.tickerDown() } }
+    }
+
+    private var chatWait: TimeInterval? { chatSeen.values.min().map { Date().timeIntervalSince($0) } }
+
+    // called on every animation tick while anything is pending
+    private func remind() {
+        guard let wait = chatWait, !tickerUp, !hovered, !closing, !island.animating else { return }
+        let stick = wait >= NotchController.chatStick
+        guard stick || Date() >= chatNext, !NotchController.missionControl() else { return }
+        chatNext = Date() + NotchController.chatEvery
+        tickerUp = true
+        setFrame(targetFrame())  // room for the strip first
+        island.showTicker({ [weak self] in
+            guard let wait = self?.chatWait else { return "" }
+            let s = Int(wait)
+            return wait >= NotchController.chatStick
+                ? L("CHECK THE CHAT · WAITING ", "ВОПРОС В ЧАТЕ · ЖДЁТ ") + String(format: "%d:%02d", s / 60, s % 60)
+                : L("CHECK THE CHAT · REPLY", "ВОПРОС В ЧАТЕ · ОТВЕТЬ")
+        }, loop: { [weak self] in
+            guard let self, let wait = self.chatWait else { return false }
+            return wait >= NotchController.chatStick && self.tickerUp
+        }, done: { [weak self] in self?.tickerDown() })
+    }
+
+    private func tickerDown() {
+        guard tickerUp else { return }
+        tickerUp = false
+        if !hovered && !closing { setFrame(targetFrame()) }
     }
 
     func asks(_ src: String) -> Int { pending.filter { ($0["src"] as? String) == src }.count }
@@ -1756,6 +2186,10 @@ final class NotchController {
             w = 2 * half
             let cardW = 2 * half - 2 * (NotchView.margin + NotchView.openR.top)
             h += TilesView.height(island.tiles.sections, pending: island.tiles.pending, width: cardW) + NotchView.margin
+        } else if tickerUp {
+            h += NotchView.tickerH + 2  // plus the spring overshoot
+            x -= NotchView.tickerPad + NotchView.tickerInset
+            w += 2 * (NotchView.tickerPad + NotchView.tickerInset)
         }
         return NSRect(x: x.rounded(), y: f.maxY - h, width: w.rounded(), height: h.rounded())
     }
@@ -1792,8 +2226,19 @@ final class NotchController {
         for p in providers {
             let d = data[p.src] ?? [:]
             let n = asks(p.src)
-            lines[p.src] = n > 0 ? DotLogo.line(src: p.src, live: true, text: n > 1 ? "🔒\(n)" : "🔒")
-                : DotLogo.line(src: p.src, live: d["live"] as? Bool ?? false, text: d["title"] as? String ?? "⚪")
+            let think = d["think"] as? Bool ?? false
+            if think, let turn = d["turn"] as? String, thinkTurn[p.src] != turn {
+                thinkTurn[p.src] = turn
+                let last = thinkWord[p.src]
+                thinkWord[p.src] = thinkWords.filter { $0 != last }.randomElement() ?? thinkWords[0]
+            }
+            if n > 0 {
+                lines[p.src] = DotLogo.line(src: p.src, live: true, text: n > 1 ? "🔒\(n)" : "🔒")
+            } else if think, let word = thinkWord[p.src] {
+                lines[p.src] = DotLogo.Line(src: p.src, live: true, text: word.uppercased(), think: true)
+            } else {
+                lines[p.src] = DotLogo.line(src: p.src, live: d["live"] as? Bool ?? false, text: d["title"] as? String ?? "⚪")
+            }
         }
         if hovered {
             island.tiles.pending = pending
@@ -1815,6 +2260,7 @@ final class NotchController {
             CATransaction.setDisableActions(true)
             if let img { island.texts[i].contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil) }
             CATransaction.commit()
+            pulse(island.texts[i], on: l.think)
         }
         // grow the window first, then slide; slide first, then shrink — the island never clips mid-animation
         shrinkWork?.cancel()
@@ -1837,13 +2283,35 @@ final class NotchController {
         tick()
     }
 
+    // "thinking" words breathe softly between the dim label shade and opaque white;
+    // additive, so a hidden label (model opacity 0) stays hidden
+    private func pulse(_ layer: CALayer, on: Bool) {
+        let on = on && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard on != (layer.animation(forKey: "pulse") != nil) else { return }
+        guard on else { return layer.removeAnimation(forKey: "pulse") }
+        let a = CABasicAnimation(keyPath: "opacity")
+        a.isAdditive = true
+        a.fromValue = -0.5
+        a.toValue = 0
+        a.duration = 1.3
+        a.autoreverses = true
+        a.repeatCount = .infinity
+        a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        a.isRemovedOnCompletion = false
+        layer.add(a, forKey: "pulse")
+    }
+
     func tick() {
+        remind()
         let t = Date().timeIntervalSinceReferenceDate
         let gray = dark ? NSColor(white: 0.62, alpha: 1) : NSColor(white: 0.42, alpha: 1)
         let imgs: [NSImage?] = providers.map { p in
             let l = lines[p.src]!
             if asks(p.src) > 0 {
                 return DotLogo.image(p.src, size: NotchController.logoSize, phase: -1, lit: Int(t * 2.5) % 2 == 0)
+            }
+            if l.think {
+                return DotLogo.neurons(p.src, size: NotchController.logoSize, frame: Int(t * 10) % DotLogo.neuronFrames)
             }
             return l.live
                 ? DotLogo.image(p.src, size: NotchController.logoSize, phase: DotLogo.phase(l, at: t), lit: true)
@@ -1963,7 +2431,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let alive = !wantsAlive ? [] : demo ? Set(providers.map(\.src)) : Running.scan()
             DispatchQueue.main.async {
                 if let doc {
-                    self.anyLive = providers.contains { (doc[$0.src] as? [String: Any])?["live"] as? Bool ?? false }
+                    self.anyLive = providers.contains {
+                        let d = doc[$0.src] as? [String: Any]
+                        return (d?["live"] as? Bool ?? false) || (d?["think"] as? Bool ?? false)
+                    }
                     self.notch?.update(doc, alive: alive)
                     for item in self.items { item.update(doc[item.src] as? [String: Any] ?? [:]) }
                 }

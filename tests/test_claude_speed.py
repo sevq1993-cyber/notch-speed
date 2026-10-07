@@ -405,6 +405,65 @@ class TestCollectHelpers(unittest.TestCase):
         self.assertEqual(cs.model_tag(None), "")
 
 
+class TestTurnState(unittest.TestCase):
+    """Open turn = the model is still on it ("thinking" in the notch while nothing is printed)."""
+
+    def rec(self, t, kind, content, stop=None, **kw):
+        r = {"type": kind, "timestamp": iso(t), "message": {"content": content}}
+        if kind == "assistant":
+            r["message"].update(model="claude-fable-5", stop_reason=stop, usage={"output_tokens": 10})
+        r.update(kw)
+        return r
+
+    def turn(self, recs):
+        return cs.claude_turn(jlines(recs))
+
+    def test_prompt_and_tool_result_are_open(self):
+        now = time.time()
+        prompt = self.rec(now - 30, "user", "fix the bug")
+        self.assertEqual(self.turn([prompt])[0], True)
+        tool = [prompt, self.rec(now - 20, "assistant", [{"type": "tool_use", "name": "Bash"}], "tool_use"),
+                self.rec(now - 10, "user", [{"type": "tool_result", "content": "ok"}])]
+        is_open, last, key = self.turn(tool)
+        self.assertTrue(is_open)
+        self.assertAlmostEqual(last, now - 10, delta=0.01)
+        self.assertAlmostEqual(key, now - 30, delta=0.01)  # the prompt keys the turn
+
+    def test_end_turn_interrupt_and_error_close(self):
+        now = time.time()
+        p = self.rec(now - 30, "user", "hi")
+        self.assertFalse(self.turn([p, self.rec(now - 5, "assistant", [{"type": "text", "text": "done"}], "end_turn")])[0])
+        self.assertFalse(self.turn([p, self.rec(now - 5, "user", [{"type": "text", "text": "[Request interrupted by user]"}])])[0])
+        err = self.rec(now - 5, "assistant", [{"type": "text", "text": "API Error"}], isApiErrorMessage=True)
+        self.assertFalse(self.turn([p, err])[0])
+
+    def test_waiting_for_the_user_is_not_thinking(self):
+        now = time.time()
+        ask = self.rec(now - 5, "assistant", [{"type": "tool_use", "name": "AskUserQuestion"}], "tool_use")
+        self.assertFalse(self.turn([self.rec(now - 30, "user", "plan it"), ask])[0])
+        for local in ("<command-name>/kids</command-name>", "<local-command-stdout>x</local-command-stdout>",
+                      "<bash-input>ls</bash-input>"):
+            self.assertFalse(self.turn([self.rec(now - 5, "user", local)])[0], local)
+
+    def test_meta_records_are_skipped(self):
+        now = time.time()
+        recs = [self.rec(now - 30, "user", "look at this"),
+                self.rec(now - 29, "user", [{"type": "text", "text": "[Image: source: x]"}], isMeta=True)]
+        self.assertTrue(self.turn(recs)[0])
+
+    def test_codex_turn(self):
+        now = time.time()
+        ev = lambda t, typ, **p: {"timestamp": iso(t), "type": "event_msg", "payload": {"type": typ, **p}}
+        started = ev(now - 60, "task_started", turn_id="t1")
+        ri = {"timestamp": iso(now - 40), "type": "response_item", "payload": {"type": "reasoning"}}
+        is_open, last, key = cs.codex_turn(jlines([started, ri]))
+        self.assertTrue(is_open)
+        self.assertEqual(key, "t1")
+        self.assertAlmostEqual(last, now - 40, delta=0.01)
+        self.assertFalse(cs.codex_turn(jlines([started, ri, ev(now - 30, "task_complete")]))[0])
+        self.assertFalse(cs.codex_turn(jlines([started, ev(now - 30, "turn_aborted")]))[0])
+
+
 class TestCodexParse(unittest.TestCase):
     def test_recovers_known_speed(self):
         now = time.time()
@@ -775,6 +834,24 @@ class TestCollectMain(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             cs.main()
         return buf.getvalue()
+
+    def menu(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print(cs.menu_json(cs.collect_rows(self.now, ("claude", "codex")), self.now))
+        return json.loads(buf.getvalue())
+
+    def test_menu_think_only_while_nothing_generates(self):
+        old = [rec_u(self.now - 300), rec_a("m1", self.now - 290, 400)]
+        # a turn whose prompt went out 40 s ago, no output since: thinking
+        self.write("-Users-x-proj-a", old + [{"type": "user", "timestamp": iso(self.now - 40),
+                                              "message": {"content": "next"}}])
+        claude = self.menu()["claude"]
+        self.assertTrue(claude.get("think"))
+        self.assertTrue(claude.get("turn"))
+        # another session printing right now: the ear shows its speed, not "thinking"
+        self.write("-Users-x-proj-b", [rec_u(self.now - 8), rec_a("m2", self.now - 2, 300)])
+        self.assertFalse(self.menu()["claude"].get("think"))
 
     def test_idle_empty_root(self):
         out = self.run_main()

@@ -187,6 +187,63 @@ def is_interrupt(r):
                for b in (c or []))
 
 
+THINK_MAX = 30 * 60  # an open turn quiet for longer is taken as abandoned (app closed mid-turn)
+USER_TOOLS = {"AskUserQuestion", "ExitPlanMode"}  # tool calls that wait for the user, not the model
+# input the model doesn't answer: local commands, ! shell input, and a slash command until its prompt follows
+LOCAL_INPUT = ("<local-command", "<bash-input>", "<bash-stdout>", "<bash-stderr>", "<command-name>")
+
+
+def claude_turn(lines):
+    """The main chain's turn: (open, last record time, turn key). Open while the newest user/assistant record is
+    a prompt or a tool result, or a reply that goes on with a tool call. The key is the time of the turn's prompt,
+    so a new prompt reads as a new turn."""
+    state = None
+    for line in reversed(lines):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        ts = parse_ts(r.get("timestamp"))
+        t = r.get("type")
+        if not ts or t not in ("user", "assistant") or r.get("isMeta"):
+            continue
+        m = r.get("message") or {}
+        c = m.get("content")
+        if state is None:
+            if t == "user":
+                local = isinstance(c, str) and c.startswith(LOCAL_INPUT)
+                state = (not is_interrupt(r) and not local, ts)
+            elif r.get("isApiErrorMessage") or m.get("model") == "<synthetic>":
+                state = (False, ts)
+            else:
+                waits = any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in USER_TOOLS
+                            for b in c or [])
+                state = (m.get("stop_reason") in ("tool_use", "pause_turn", None) and not waits, ts)
+            if not state[0]:
+                return False, ts, None
+        if t == "user" and not (isinstance(c, list) and c
+                                and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)):
+            return True, state[1], ts  # the prompt that started this turn
+    return (state[0], state[1], None) if state else (False, None, None)
+
+
+def codex_turn(lines):
+    """Codex turn: (open, last record time, turn id); task_started opens it, task_complete / turn_aborted end it."""
+    last = None
+    for line in reversed(lines):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        last = last or parse_ts(r.get("timestamp"))
+        p = r.get("payload") or {}
+        if r.get("type") == "event_msg" and p.get("type") in ("task_complete", "turn_aborted"):
+            return False, last, None
+        if r.get("type") == "event_msg" and p.get("type") == "task_started":
+            return True, last, p.get("turn_id") or r.get("timestamp")
+    return False, last, None
+
+
 def current_model_groups(groups):
     """只留最新响应所属模型的组:会话中途切模型时,不同模型的点混拟会失真。"""
     if not groups:
@@ -1199,12 +1256,14 @@ def collect_rows(now, sources=None):
         if ltype == "user" and lts and WAIT_MIN < now - lts <= WAIT_MAX:
             wait = int(now - lts)
         n_ag, burn, apts = agent_metrics(agent_paths, now)
+        open_, last_ts, turn = claude_turn(lines)
+        busy = bool(open_ and last_ts and now - last_ts < THINK_MAX)
         # 入榜需有窗口内的实质活动:近期响应 / 等待中 / 近期错误 / 代理在跑。
         # 只按文件 mtime 会放进「文件被碰过但最后响应在几天前」的僵尸会话
         # (如后台 claude -p 追加了非响应记录),显示成「N千分钟前」还挤占名额。
         has_recent = bool(groups) and now - groups[-1]["end"] < SCAN_WINDOW
         has_err = any(now - e <= ERR_ROW_WINDOW for e in err_ts)
-        if not has_recent and wait is None and not has_err and not n_ag:
+        if not has_recent and wait is None and not has_err and not n_ag and not busy:
             continue
         for g in groups:
             d = g["end"] - g["start"]
@@ -1212,7 +1271,7 @@ def collect_rows(now, sources=None):
                 pool.setdefault(g.get("model"), []).append((g["out"], d))
         for mdl, out, d in apts:  # 子代理响应与主链同构,并入同模型点池
             pool.setdefault(mdl, []).append((out, d))
-        sessions.append({"mtime": mtime, "label": project_label(dname),
+        sessions.append({"mtime": mtime, "label": project_label(dname), "busy": busy, "turn": turn,
                          "chat": claude_chat_title(lines),
                          "project": L("No folder", "Без папки") if "scratch-workspaces" in dname else project_label(dname),
                          "src": "claude", "groups": groups, "err_ts": err_ts, "wait": wait,
@@ -1224,6 +1283,8 @@ def collect_rows(now, sources=None):
         lines = tail_lines(path)
         groups, err_ts, label, trig_ts = codex_parse(lines)
         ask = codex_question(lines)
+        open_, last_ts, turn = codex_turn(lines)
+        busy = bool(open_ and not ask and last_ts and now - last_ts < THINK_MAX)  # a question waits for the user
         if not label or any(g["model"] == "codex" for g in groups):
             head_label, head_model = codex_head(path)
             label = label or head_label
@@ -1236,13 +1297,13 @@ def collect_rows(now, sources=None):
             wait = int(now - trig_ts)
         has_recent = bool(groups) and now - groups[-1]["end"] < SCAN_WINDOW
         has_err = any(now - e <= ERR_ROW_WINDOW for e in err_ts)
-        if not has_recent and wait is None and not has_err and not ask:
+        if not has_recent and wait is None and not has_err and not ask and not busy:
             continue
         for g in groups:
             d = g["end"] - g["start"]
             if plausible_point(g["out"], d):
                 pool.setdefault(g.get("model"), []).append((g["out"], d))
-        sessions.append({"mtime": mtime, "label": (label or "codex")[:16], "ask": ask,
+        sessions.append({"mtime": mtime, "label": (label or "codex")[:16], "ask": ask, "busy": busy, "turn": turn,
                          "chat": codex_chat_title(path, codex_titles),
                          "project": label or "",
                          "src": "codex", "groups": groups, "err_ts": err_ts, "wait": wait,
@@ -1310,7 +1371,7 @@ def collect_rows(now, sources=None):
             rows.append({"end": s["mtime"], "mtime": s["mtime"], "fit": None,
                          "glob": False, "win": None, "wait": s["wait"],
                          "err_ts": s["err_ts"], "label": s["label"], "src": s["src"],
-                         "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"), "ask": s.get("ask"),
+                         "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"), "ask": s.get("ask"), "busy": s.get("busy", False), "turn": s.get("turn"),
                          "model": "", "last": None, "agents": s["agents"], "hist": []})
             continue
         g = groups[-1]
@@ -1336,7 +1397,7 @@ def collect_rows(now, sources=None):
         rows.append({"end": g["end"], "mtime": s["mtime"], "fit": fit, "hist": hist,
                      "glob": borrowed, "win": win, "wait": s["wait"],
                      "err_ts": s["err_ts"], "label": s["label"], "src": s["src"],
-                     "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"), "ask": s.get("ask"),
+                     "chat": s.get("chat", ""), "project": s.get("project") or s["label"], "sid": s.get("sid"), "ask": s.get("ask"), "busy": s.get("busy", False), "turn": s.get("turn"),
                      "model": model_tag(g.get("model")), "last": g,
                      "agents": s["agents"]})
     rows.sort(key=lambda r: r["end"], reverse=True)
@@ -1656,8 +1717,14 @@ def menu_json(rows, now, sources=("claude", "codex")):
         rs = sorted((r for r in rows if r.get("src") == src),
                     key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
         items = []
+        thinking = []  # (turn key) of sessions in an open turn with no fresh output
+        generating = False
         for r in rs:
             fit, g = r["fit"], r["last"]
+            gen = bool(r["agents"][0] or now - r["end"] < ACTIVE_WINDOW)
+            generating = generating or gen
+            if r.get("busy") and not gen:
+                thinking.append(r.get("turn"))
             cache = cold = None
             if g:
                 denom = g["inp"] + g["cr"] + g["cc"]
@@ -1694,6 +1761,10 @@ def menu_json(rows, now, sources=("claude", "codex")):
         limits = claude_limits(now) if src == "claude" else codex_limits(now) if src == "codex" else []
         out[src] = {"title": title_text(rs, now), "live": any(it["live"] for it in items), "rows": items,
                     "limits": limits, "today": today.get(src)}
+        # the ear shows "thinking" only while nothing of this provider is producing output
+        if thinking and not generating:
+            out[src]["think"] = True
+            out[src]["turn"] = str(thinking[0])
     return json.dumps(out, ensure_ascii=False)
 
 
