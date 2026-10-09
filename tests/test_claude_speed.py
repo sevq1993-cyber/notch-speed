@@ -851,7 +851,11 @@ class TestCollectMain(unittest.TestCase):
         self.assertTrue(claude.get("turn"))
         # another session printing right now: the ear shows its speed, not "thinking"
         self.write("-Users-x-proj-b", [rec_u(self.now - 8), rec_a("m2", self.now - 2, 300)])
-        self.assertFalse(self.menu()["claude"].get("think"))
+        claude = self.menu()["claude"]
+        self.assertFalse(claude.get("think"))
+        # the card still names the thinking chat, on top even though the other one answered later
+        self.assertEqual([r["think"] for r in claude["rows"]], [True, False])
+        self.assertEqual(claude["rows"][0]["label"], "proj-a")
 
     def test_menu_thinks_through_tool_calls_with_no_speed_yet(self):
         # a fresh turn busy with tool calls: output keeps coming, but too little for a speed, so the ear would be blank
@@ -864,6 +868,7 @@ class TestCollectMain(unittest.TestCase):
         self.assertTrue(claude.get("live"))
         self.assertIsNone(claude["rows"][0]["tps"])
         self.assertTrue(claude.get("think"))
+        self.assertTrue(claude["rows"][0]["think"])
 
     def test_idle_empty_root(self):
         out = self.run_main()

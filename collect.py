@@ -1718,11 +1718,11 @@ def menu_json(rows, now, sources=("claude", "codex")):
                     key=lambda r: r["end"], reverse=True)[:MAX_SESSIONS]
         items = []
         thinking = []  # (turn key) of sessions in an open turn
-        generating = False
+        speed = False  # something generating has a speed to show
         for r in rs:
             fit, g = r["fit"], r["last"]
             gen = bool(r["agents"][0] or now - r["end"] < ACTIVE_WINDOW)
-            generating = generating or gen
+            speed = speed or bool(gen and r["fit"])
             if r.get("busy"):
                 thinking.append(r.get("turn"))
             cache = cold = None
@@ -1758,15 +1758,18 @@ def menu_json(rows, now, sources=("claude", "codex")):
                 "open": open_url(src, r.get("sid"), desktop),
                 "ask": r.get("ask"),
             })
+            # this chat's turn is open with no live speed to show: the card names it as thinking
+            items[-1]["think"] = bool(r.get("busy") and not (gen and items[-1]["tps"] is not None))
         limits = claude_limits(now) if src == "claude" else codex_limits(now) if src == "codex" else []
         out[src] = {"title": title_text(rs, now), "live": any(it["live"] for it in items), "rows": items,
                     "limits": limits, "today": today.get(src)}
         # the ear shows "thinking" while a turn is open and there is no live speed to show instead: nothing of this
         # provider is producing output, or what it produces (tool calls between reasoning) has no speed yet
-        speed = any(it["live"] and it["tps"] is not None for it in items)
-        if thinking and not (generating and speed):
-            out[src]["think"] = True
-            out[src]["turn"] = str(thinking[0])
+        items.sort(key=lambda it: not it["think"])  # thinking chats first, otherwise newest first
+        if thinking:
+            out[src]["turn"] = str(thinking[0])  # keys the word drawn for it, also named in the card
+            if not speed:
+                out[src]["think"] = True
     return json.dumps(out, ensure_ascii=False)
 
 

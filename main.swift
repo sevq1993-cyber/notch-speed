@@ -660,6 +660,7 @@ final class TilesView: NSView {
         }
     }
     var today: [String: [String: Int]] = [:]  // per provider: output tokens ("out") and responses ("n") since midnight
+    var pulse: CGFloat = 1  // 0...1, the soft blink of a thinking chat's word
     var hold: (id: String, lit: Int)? = nil
     var hoverButton: Int? = nil
     private(set) var buttons: [(rect: NSRect, id: String, action: String)] = []
@@ -1074,7 +1075,10 @@ final class TilesView: NSView {
         if let a = r["agents"] as? Int, a > 0 { parts.append(L("agent", "агент") + " \(a)") }
         d.append(text(parts.map { " · " + $0 }.joined(), mono, sec))
         if let e = r["errs"] as? Int, e > 0 { d.append(text(" · ⚠\(e)", mono, .systemRed)) }
-        if let wt = r["wait"] as? Int {
+        if let word = r["thinkWord"] as? String {
+            // the ear's word for this chat's open turn, blinking softly to white like the ear
+            d.append(text(" · " + word + "…", mono, NSColor.white.withAlphaComponent(0.5 + 0.5 * pulse)))
+        } else if let wt = r["wait"] as? Int {
             d.append(text(" · " + L("waiting \(wt)s", "ждёт \(wt)с"), mono, .systemYellow))
         } else if let ago = r["ago"] as? String {
             d.append(text(" · " + ago, mono, sec))
@@ -2218,7 +2222,15 @@ final class NotchController {
     }
 
     func sections() -> [(src: String, name: String, rows: [[String: Any]])] {
-        providers.map { (src: $0.src, name: $0.name, rows: data[$0.src]?["rows"] as? [[String: Any]] ?? []) }
+        providers.map { p in
+            let rows = (data[p.src]?["rows"] as? [[String: Any]] ?? []).map { r -> [String: Any] in
+                guard r["think"] as? Bool == true, let word = thinkWord[p.src] else { return r }
+                var r = r
+                r["thinkWord"] = word
+                return r
+            }
+            return (src: p.src, name: p.name, rows: rows)
+        }
     }
 
     func limits(_ i: Int) -> [[String: Any]] { data[providers[i].src]?["limits"] as? [[String: Any]] ?? [] }
@@ -2291,7 +2303,8 @@ final class NotchController {
             let d = data[p.src] ?? [:]
             let n = asks(p.src)
             let think = d["think"] as? Bool ?? false
-            if think, let turn = d["turn"] as? String, thinkTurn[p.src] != turn {
+            // a word per open turn, even while the ear shows another chat's speed: the card names it
+            if let turn = d["turn"] as? String, thinkTurn[p.src] != turn {
                 thinkTurn[p.src] = turn
                 let last = thinkWord[p.src]
                 thinkWord[p.src] = thinkWords.filter { $0 != last }.randomElement() ?? thinkWords[0]
@@ -2367,6 +2380,16 @@ final class NotchController {
 
     func tick() {
         remind()
+        // a thinking chat's word in the open card blinks with the ear: re-render the card's raster (~0.5 ms)
+        if hovered, island.expanded, !island.animating,
+           island.tiles.sections.contains(where: { $0.rows.contains { $0["thinkWord"] != nil } }) {
+            let t = Date().timeIntervalSinceReferenceDate
+            let p = ((0.5 - 0.5 * cos(t * .pi / 1.3)) * 8).rounded() / 8  // 8 steps, like the ear's pixel frames
+            if p != island.tiles.pulse {
+                island.tiles.pulse = p
+                island.renderContent()
+            }
+        }
         let t = Date().timeIntervalSinceReferenceDate
         let gray = dark ? NSColor(white: 0.62, alpha: 1) : NSColor(white: 0.42, alpha: 1)
         let imgs: [NSImage?] = providers.map { p in
