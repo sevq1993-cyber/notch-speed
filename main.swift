@@ -1481,6 +1481,12 @@ final class NotchView: NSView {
         return NotchView.notchPath(r, top: t, bottom: NotchView.closedR.bottom)
     }
 
+    // the strip's shape in the current window for a reach of `l`/`r` past the cutout: the card folds into it
+    func stripPath(l: CGFloat, r: CGFloat) -> CGPath {
+        tickerSpan = (l, r)
+        return tickerPath(true)
+    }
+
     private func placeTicker() {
         let inset = NotchView.closedR.top + NotchView.closedR.bottom  // clear of the rounded corners
         tickerClip.frame = CGRect(x: notchX - tickerSpan.l + inset, y: bounds.height - notch.height - NotchView.tickerH,
@@ -1488,7 +1494,9 @@ final class NotchView: NSView {
     }
 
     // slide the strip out and run `text()` through it once, again while `loop()` holds; then fold it and call `done`
-    func showTicker(_ text: @escaping () -> (String, [NSColor]), loop: @escaping () -> Bool, done: @escaping () -> Void) {
+    // `grown`: the card has just folded into the strip's shape, so it is already out
+    func showTicker(grown: Bool = false, _ text: @escaping () -> (String, [NSColor]), loop: @escaping () -> Bool,
+                    done: @escaping () -> Void) {
         tickerGen += 1
         let gen = tickerGen
         tickerOut = true
@@ -1503,10 +1511,12 @@ final class NotchView: NSView {
         ticker.opacity = 1
         let to = tickerPath(true)
         ticker.removeAllAnimations()
-        ticker.add(NotchView.spring("path", from: tickerPath(false), to: to, response: 0.42, damping: 0.75), forKey: "path")
+        if !grown {
+            ticker.add(NotchView.spring("path", from: tickerPath(false), to: to, response: 0.42, damping: 0.75), forKey: "path")
+        }
         ticker.path = to
         CATransaction.commit()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (grown ? 0.05 : 0.3)) { [weak self] in
             guard let self, gen == self.tickerGen else { return }
             self.runTicker(gen, text, loop: loop, done: done)
         }
@@ -1643,7 +1653,8 @@ final class NotchView: NSView {
         return a
     }
 
-    func setExpanded(_ on: Bool, reveal: Bool = false, from start: CGPath? = nil, completion: (() -> Void)? = nil) {
+    func setExpanded(_ on: Bool, reveal: Bool = false, from start: CGPath? = nil, to end: CGPath? = nil,
+                     completion: (() -> Void)? = nil) {
         guard on != expanded else { return }
         if !on { cancelAnnounce() }
         expanded = on
@@ -1651,7 +1662,7 @@ final class NotchView: NSView {
         let gen = generation
         animating = true
         let from = start ?? panel.presentation()?.path ?? panel.path ?? closedPath
-        let to = on ? openPath : closedPath
+        let to = end ?? (on ? openPath : closedPath)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setCompletionBlock { [weak self] in
@@ -1659,6 +1670,7 @@ final class NotchView: NSView {
             self.animating = false
             if !on {
                 self.panel.opacity = 0
+                self.panel.path = nil  // it may have folded into the strip; the next open starts from the cutout
                 completion?()
             }
         }
@@ -2093,12 +2105,20 @@ final class NotchController {
             closing = false
             setFrame(targetFrame())
         } else {
-            // keep the window large until the card has folded back into the notch
+            // keep the window large until the card has folded back into the notch; with a question still waiting
+            // in a chat it folds into the reminder strip instead, which then runs on from there
             closing = true
-            island.setExpanded(false) { [weak self] in
+            let strip = chatWait != nil && !NotchController.missionControl()
+            let pad = NotchView.tickerPad
+            let to = strip ? island.stripPath(l: earWidth(0) + pad, r: earWidth(1) + pad) : nil
+            island.setExpanded(false, to: to) { [weak self] in
                 guard let self else { return }
                 self.closing = false
-                self.setFrame(self.targetFrame())
+                if strip, self.chatWait != nil, !self.hovered {
+                    self.startStrip(grown: true)
+                } else {
+                    self.setFrame(self.targetFrame())
+                }
             }
         }
     }
@@ -2162,10 +2182,14 @@ final class NotchController {
         guard let wait = chatWait, !tickerUp, !hovered, !closing, !island.animating else { return }
         let stick = wait >= NotchController.chatStick
         guard stick || Date() >= chatNext, !NotchController.missionControl() else { return }
+        startStrip()
+    }
+
+    private func startStrip(grown: Bool = false) {
         chatNext = Date() + NotchController.chatEvery
         tickerUp = true
         setFrame(targetFrame())  // room for the strip first
-        island.showTicker({ [weak self] in
+        island.showTicker(grown: grown, { [weak self] in
             guard let oldest = self?.chatOldest else { return ("", []) }
             let wait = Date().timeIntervalSince(oldest.at), s = Int(wait)
             // the brand of whoever has waited longest: Codex in its blue-violet gradient, Claude in the lock's amber
