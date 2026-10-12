@@ -547,36 +547,49 @@ final class Permissions {
     }
 
     // the chat answered once the transcript holds the result of this request's tool_use. The tool_use is found by
-    // tool and input (it can land in the transcript after the hook ran); only the transcript tail is read.
-    static func answered(_ r: [String: Any]) -> Bool {
-        guard let path = r["transcript"] as? String, let fh = FileHandle(forReadingAtPath: path) else { return false }
+    // tool and input (it can land in the transcript after the hook ran). Each reminder reads its transcript
+    // incrementally from just before the request on, so megabytes of screenshots or output after the tool_use
+    // (beyond any fixed tail) cannot hide it or its result.
+    private var tracked: [String: (offset: UInt64, tool: String?)] = [:]
+
+    private func answered(_ r: [String: Any]) -> Bool {
+        guard let rid = r["id"] as? String, let path = r["transcript"] as? String,
+              let fh = FileHandle(forReadingAtPath: path) else { return false }
         defer { try? fh.close() }
         let end = (try? fh.seekToEnd()) ?? 0
-        try? fh.seek(toOffset: end > 262_144 ? end - 262_144 : 0)
+        var st = tracked[rid] ?? (end > 262_144 ? end - 262_144 : 0, nil)
+        if st.offset > end { st = (0, nil) }  // rewritten
+        try? fh.seek(toOffset: st.offset)
         let data = (try? fh.readToEnd()) ?? Data()
+        // whole lines only: a record being written is read again next time
+        guard let cut = data.lastIndex(of: UInt8(ascii: "\n")) else { tracked[rid] = st; return false }
+        let chunk = data[data.startIndex...cut]
+        st.offset += UInt64(chunk.count)
         let tool = r["tool"] as? String ?? "", want = r["text"] as? String ?? ""
         // the same command may have run before in this chat: only a tool_use from just before the request counts
         let since = (r["created"] as? Double ?? 0) - 30
-        var id: String?
-        for line in data.split(separator: UInt8(ascii: "\n")).reversed() where id == nil {
-            guard line.range(of: Data("\"tool_use\"".utf8)) != nil,
-                  let rec = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
-                  let blocks = (rec["message"] as? [String: Any])?["content"] as? [[String: Any]] else { continue }
-            guard let ts = (rec["timestamp"] as? String).flatMap(Self.iso.date(from:)),
-                  ts.timeIntervalSince1970 >= since else { break }
-            for b in blocks.reversed() where b["type"] as? String == "tool_use" && b["name"] as? String == tool {
-                // the same field permission-hook.py's summary() shows; other tools (MCP) match by name alone
-                let input = b["input"] as? [String: Any] ?? [:]
-                let keys = tool == "Bash" ? ["command"] : ["file_path", "notebook_path", "url", "pattern", "path"]
-                let text = keys.lazy.compactMap { input[$0].map { "\($0)" } }.first
-                if text == nil || text == want {
-                    id = b["id"] as? String
-                    break
+        if st.tool == nil {
+            for line in chunk.split(separator: UInt8(ascii: "\n")) where st.tool == nil {
+                guard line.range(of: Data("\"tool_use\"".utf8)) != nil,
+                      let rec = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                      let ts = (rec["timestamp"] as? String).flatMap(Self.iso.date(from:)),
+                      ts.timeIntervalSince1970 >= since,
+                      let blocks = (rec["message"] as? [String: Any])?["content"] as? [[String: Any]] else { continue }
+                for b in blocks where b["type"] as? String == "tool_use" && b["name"] as? String == tool {
+                    // the same field permission-hook.py's summary() shows; other tools (MCP) match by name alone
+                    let input = b["input"] as? [String: Any] ?? [:]
+                    let keys = tool == "Bash" ? ["command"] : ["file_path", "notebook_path", "url", "pattern", "path"]
+                    let text = keys.lazy.compactMap { input[$0].map { "\($0)" } }.first
+                    if text == nil || text == want {
+                        st.tool = b["id"] as? String
+                        break
+                    }
                 }
             }
         }
-        guard let id else { return false }
-        return data.range(of: Data("\"tool_use_id\":\"\(id)\"".utf8)) != nil
+        tracked[rid] = st
+        guard let id = st.tool else { return false }
+        return chunk.range(of: Data("\"tool_use_id\":\"\(id)\"".utf8)) != nil
     }
 
     // the hook only waits for an app that announced itself
@@ -603,8 +616,9 @@ final class Permissions {
         for r in asks where Self.hostInFront(r) { pass(r) }
         asks.removeAll { reminders[$0["id"] as? String ?? ""] != nil }
         reminders = reminders.filter { _, r in
-            now - (r["created"] as? Double ?? 0) < Self.reminderTTL && !Self.answered(r)
+            now - (r["created"] as? Double ?? 0) < Self.reminderTTL && !answered(r)
         }
+        tracked = tracked.filter { reminders[$0.key] != nil }
         items = (asks + reminders.values).sorted { ($0["created"] as? Double ?? 0) < ($1["created"] as? Double ?? 0) }
         if items.isEmpty {
             clock?.invalidate()
