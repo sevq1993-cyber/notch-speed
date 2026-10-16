@@ -808,6 +808,28 @@ final class TilesView: NSView {
         return min(cmdMaxLines, max(1, Int((h / cmdLine).rounded(.up))))
     }
 
+    // a chat's subagents often hit the same tool at once: their reminders share one card that names them all
+    static func grouped(_ items: [[String: Any]]) -> [[String: Any]] {
+        var keys: [String] = [], groups: [String: [[String: Any]]] = [:]
+        for (i, p) in items.enumerated() {
+            let s = p["session"] as? String ?? ""
+            let key = p["state"] as? String == "chat" && questions(p) == nil && !s.isEmpty
+                ? s + "\n" + (p["tool"] as? String ?? "") : "#\(i)"
+            if groups[key] == nil { keys.append(key) }
+            groups[key, default: []].append(p)
+        }
+        return keys.map { k in
+            let g = groups[k]!
+            guard g.count > 1 else { return g[0] }
+            var p = g[0]
+            p["count"] = g.count
+            p["agent"] = nil
+            let names = g.compactMap { $0["agent"] as? String }
+            if !names.isEmpty { p["text"] = names.joined(separator: " · ") }
+            return p
+        }
+    }
+
     static func pendingHeight(_ p: [String: Any], width: CGFloat) -> CGFloat {
         if let qs = questions(p) { return 52 + questionHeight(qs, width: width) + 14 }
         return 52 + CGFloat(cmdLines(p, width: width)) * cmdLine + 14
@@ -967,8 +989,15 @@ final class TilesView: NSView {
         ps.lineBreakMode = .byTruncatingTail
         var title = p["chat"] as? String ?? ""
         if title.isEmpty { title = qs != nil ? L("Question", "Вопрос") : L("Permission request", "Запрос разрешения") }
-        NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor,
-                                                       .paragraphStyle: ps])
+        // who in the chat asks: one of its subagents, or several of them at once
+        let count = p["count"] as? Int ?? 1
+        let who = count > 1 ? plural(count, "agent", "agents", ru: ("агент", "агента", "агентов"))
+            : (p["agent"] as? String).map { L("agent ", "агент ") + $0 } ?? ""
+        let head = NSMutableAttributedString(string: who.isEmpty ? "" : who + " · ", attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: amber.withAlphaComponent(inChat ? 0.8 : 1)])
+        head.append(NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]))
+        head.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: head.length))
+        head
             .draw(with: NSRect(x: tx, y: box.minY + 12, width: bx - tx - 4, height: 17), options: [.usesLineFragmentOrigin])
         var pr = p["project"] as? String ?? ""
         let qst = qstate[id]
@@ -979,7 +1008,7 @@ final class TilesView: NSView {
             if inChat {
                 let place = p["src"] as? String == "codex" ? L("in Codex", "в Codex")
                     : p["host"] as? String == "com.anthropic.claudefordesktop" ? L("in chat", "в чате") : L("in terminal", "в терминале")
-                d.append(text((pr.isEmpty ? "" : " · ") + L("waiting ", "ждёт ответа ") + place, mono, amber))
+                d.append(text((pr.isEmpty ? "" : " · ") + (count > 1 ? L("waiting ", "ждут ответа ") : L("waiting ", "ждёт ответа ")) + place, mono, amber))
             }
             d.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: d.length))
             d.draw(with: NSRect(x: inner.minX, y: box.minY + 34, width: inner.width, height: 14), options: [.usesLineFragmentOrigin])
@@ -2179,7 +2208,7 @@ final class NotchController {
             DispatchQueue.main.async { [weak self] in self?.peek() }  // after this update has laid out
         }
         pending = items
-        island.tiles.pending = items
+        island.tiles.pending = TilesView.grouped(items)
         if items.isEmpty { island.cancelHold() }
         // every question waiting in a chat (Codex ones only ever are) gets the strip until it is answered
         let chat = items.filter { $0["state"] as? String == "chat" }
@@ -2332,7 +2361,7 @@ final class NotchController {
             }
         }
         if hovered {
-            island.tiles.pending = pending
+            island.tiles.pending = TilesView.grouped(pending)
             island.tiles.today = todayBySrc
             island.setSections(sections())
         }

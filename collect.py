@@ -228,8 +228,11 @@ def claude_turn(lines):
 
 
 def codex_turn(lines):
-    """Codex turn: (open, last record time, turn id); task_started opens it, task_complete / turn_aborted end it."""
-    last = None
+    """Codex turn: (open, last record time, turn id); task_started opens it, task_complete / turn_aborted end it.
+
+    A long turn (screenshots, big tool outputs) can push task_started out of the tail; its records still carry the
+    turn id, and with no task_complete after them that turn is still open."""
+    last = tid = None
     for line in reversed(lines):
         try:
             r = json.loads(line)
@@ -241,7 +244,8 @@ def codex_turn(lines):
             return False, last, None
         if r.get("type") == "event_msg" and p.get("type") == "task_started":
             return True, last, p.get("turn_id") or r.get("timestamp")
-    return False, last, None
+        tid = tid or (p.get("turn_id") if isinstance(p, dict) else None)
+    return bool(tid), last, tid
 
 
 def current_model_groups(groups):

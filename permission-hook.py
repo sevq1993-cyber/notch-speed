@@ -76,6 +76,20 @@ def context(info):
     return chat, os.path.basename((info.get("cwd") or "").rstrip("/")), link
 
 
+def agent(info):
+    """A subagent's request: its own transcript (tool calls never reach the chat's) and its task, for the card."""
+    aid, tp = info.get("agent_id"), info.get("transcript_path") or ""
+    if not aid or not tp.endswith(".jsonl"):
+        return tp, ""
+    base = os.path.join(tp[:-len(".jsonl")], "subagents", "agent-" + str(aid))
+    try:
+        with open(base + ".meta.json", encoding="utf-8") as fh:
+            name = json.load(fh).get("description") or ""
+    except (OSError, ValueError, AttributeError):
+        name = ""
+    return base + ".jsonl", name or info.get("agent_type") or "agent"
+
+
 def wait_answer(path, deadline):
     while time.time() < deadline:
         try:
@@ -97,14 +111,17 @@ def main():
     inp = info.get("tool_input") or {}
     text = summary(tool, inp)
     chat, project, link = context(info)
+    transcript, agent_name = agent(info)
     now = time.time()
     rid = uuid.uuid4().hex
     req = {"id": rid, "src": "claude", "tool": tool, "text": text, "chat": chat, "project": project,
            "open": link, "danger": bool(tool == "Bash" and DANGER.search(text)),
            # the app hosting this session: in front means the user sees the chat's own dialog
            "host": os.environ.get("__CFBundleIdentifier", ""),
-           "transcript": info.get("transcript_path") or "",
+           "transcript": transcript, "session": info.get("session_id") or "",
            "created": now, "expires": now + TIMEOUT}
+    if agent_name:
+        req["agent"] = agent_name
     if tool == "AskUserQuestion":
         req["questions"] = questions(inp)
     os.makedirs(DIR, mode=0o700, exist_ok=True)

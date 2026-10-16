@@ -462,6 +462,14 @@ class TestTurnState(unittest.TestCase):
         self.assertAlmostEqual(last, now - 40, delta=0.01)
         self.assertFalse(cs.codex_turn(jlines([started, ri, ev(now - 30, "task_complete")]))[0])
         self.assertFalse(cs.codex_turn(jlines([started, ev(now - 30, "turn_aborted")]))[0])
+        # a long turn (screenshots, big outputs) pushes task_started out of the tail: its records still carry
+        # the turn id, and with no task_complete after them the turn is open
+        done = ev(now - 50, "item_completed", turn_id="t2")
+        is_open, _, key = cs.codex_turn(jlines([done, ri]))
+        self.assertTrue(is_open)
+        self.assertEqual(key, "t2")
+        self.assertFalse(cs.codex_turn(jlines([done, ri, ev(now - 30, "task_complete", turn_id="t2")]))[0])
+        self.assertFalse(cs.codex_turn(jlines([ri]))[0])  # records without a turn id say nothing
 
 
 class TestCodexParse(unittest.TestCase):
