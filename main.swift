@@ -2468,9 +2468,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var running = false
     var anyLive = false
     let permissions = Permissions()
-    // collect.py 与二进制同目录:仓库 clone 到哪都能跑,无硬编码路径
-    let script = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
-        .resolvingSymlinksInPath().deletingLastPathComponent()
+    // collect.py 与二进制同目录:仓库 clone 到哪都能跑,无硬编码路径; the .app built by install.sh names the clone instead
+    let script = URL(fileURLWithPath: Bundle.main.object(forInfoDictionaryKey: "ClaudeSpeedRepo") as? String
+                     ?? URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+                        .resolvingSymlinksInPath().deletingLastPathComponent().path)
         .appendingPathComponent("collect.py").path
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -2576,6 +2577,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// one copy: opening the app while the login agent already runs it does nothing
+if let id = Bundle.main.bundleIdentifier,
+   NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0 != .current }) {
+    exit(0)
+}
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)  // 不占 Dock,只驻菜单栏
 let delegate = AppDelegate()

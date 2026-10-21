@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-speed installer (macOS / Linux / WSL)
-# macOS: compiles the menubar app, installs a user LaunchAgent, and (optionally)
-#        wires the Claude Code statusline.
+# macOS: compiles the menubar app into ClaudeSpeed.app (/Applications, or $CLAUDE_SPEED_APP_DIR),
+#        installs a user LaunchAgent, and (optionally) wires the Claude Code statusline.
 # Linux/WSL: no tray here (WSLg has no reliable tray); wires the statusline only.
 #        Use install.ps1 on the Windows side for the tray — it can merge WSL
 #        sessions via `wsl.exe` (see README, "Windows + WSL").
@@ -15,6 +15,7 @@ cd "$(dirname "$0")"
 DIR="$(pwd)"
 LABEL="com.claude-speed.menubar"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+APP="${CLAUDE_SPEED_APP_DIR:-/Applications}/ClaudeSpeed.app"
 
 wire_statusline() {
   echo "==> Wiring Claude Code statusline (~/.claude/settings.json, backup: .bak)"
@@ -64,8 +65,36 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 not found."; exit 1; }
 echo "==> Compiling ClaudeSpeed"
 swiftc -O -o ClaudeSpeed main.swift
 
-echo "==> Installing LaunchAgent $LABEL"
+# a real app (name and icon in Finder, Spotlight, Activity Monitor); collect.py stays in this clone
+echo "==> Building $APP"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp ClaudeSpeed "$APP/Contents/MacOS/ClaudeSpeed"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cat > "$APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>com.claude-speed.app</string>
+    <key>CFBundleName</key><string>ClaudeSpeed</string>
+    <key>CFBundleExecutable</key><string>ClaudeSpeed</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>ClaudeSpeedRepo</key><string>$DIR</string>
+</dict>
+</plist>
+EOF
+codesign --force --sign - "$APP" >/dev/null
+touch "$APP"  # Finder picks up the icon
+
+echo "==> Installing LaunchAgent $LABEL"
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -73,9 +102,9 @@ cat > "$PLIST" <<EOF
 <plist version="1.0">
 <dict>
     <key>Label</key><string>$LABEL</string>
-    <key>ProgramArguments</key><array><string>$DIR/ClaudeSpeed</string></array>
+    <key>ProgramArguments</key><array><string>$APP/Contents/MacOS/ClaudeSpeed</string></array>
     <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
     <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict>
 </plist>

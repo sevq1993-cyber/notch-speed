@@ -52,7 +52,7 @@ Requires a Mac with a notch (on other Macs the same data shows as menu bar items
 
 ```bash
 git clone https://github.com/sevq1993-cyber/notch-speed && cd notch-speed
-./install.sh                # notch app, starts at login
+./install.sh                # ClaudeSpeed.app in /Applications, starts at login
 ./install.sh --statusline   # + Claude Code statusline
 ```
 
@@ -160,8 +160,9 @@ seg=$(printf '%s' "$input" | CLAUDE_SPEED_SEP=" | " \
 ## Operations
 
 ```bash
-# Rebuild after editing main.swift
-swiftc -O -o ClaudeSpeed main.swift
+# Rebuild after editing main.swift: compiles, refreshes /Applications/ClaudeSpeed.app and restarts it
+# (collect.py is read from this clone, so edits to it apply on the next poll)
+./install.sh
 
 # Restart the menu bar app — use kickstart, NOT unload/load:
 # from a non-GUI context (SSH, agents, background shells) unload/load starts

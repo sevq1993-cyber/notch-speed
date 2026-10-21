@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-speed uninstaller: removes the LaunchAgent and, if it points into
+# claude-speed uninstaller: removes the LaunchAgent, ClaudeSpeed.app and, if it points into
 # this directory, the statusline wiring in ~/.claude/settings.json.
 # The repo directory itself is left in place — delete it manually if desired.
 set -euo pipefail
@@ -10,6 +10,11 @@ LABEL="com.claude-speed.menubar"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 echo "LaunchAgent removed."
+APP="${CLAUDE_SPEED_APP_DIR:-/Applications}/ClaudeSpeed.app"
+if [[ -d "$APP" ]]; then
+  rm -rf "$APP"
+  echo "$APP removed."
+fi
 
 python3 - "$DIR" <<'PY'
 import json, os, sys
