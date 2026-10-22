@@ -2460,6 +2460,62 @@ extension NSScreen {
     var hasNotch: Bool { safeAreaInsets.top > 0 && auxiliaryTopLeftArea != nil }
 }
 
+// the weekly limits left, pushed to the launcher (app.home) of an Android TV over adb: on change and at least
+// every 15 minutes, in the background with a 5 s timeout; a TV that is off or asleep is skipped silently
+enum TVLimits {
+    static let enabled = true
+    static let device = "192.168.10.187:5555"
+    static let adb = "/opt/homebrew/bin/adb"
+    static let every: TimeInterval = 15 * 60, retry: TimeInterval = 60, timeout: TimeInterval = 5
+    // next: the periodic re-push; quiet: no new try before it after a failure
+    private static var sent: [String] = [], next = Date.distantPast, quiet = Date.distantPast, busy = false, logged = false
+
+    static func push(_ doc: [String: Any]) {
+        guard enabled, !busy, FileManager.default.isExecutableFile(atPath: adb) else { return }
+        func week(_ src: String) -> [String: Any]? {
+            ((doc[src] as? [String: Any])?["limits"] as? [[String: Any]])?.first { $0["week"] as? Bool == true }
+        }
+        var extras: [String] = []
+        for src in ["claude", "codex"] {
+            if let used = week(src)?["pct"] as? Int { extras += ["--ei", src, "\(max(0, 100 - used))"] }
+            if let at = week(src)?["resets"] as? Int { extras += ["--el", src + "_ts", "\(at)"] }  // for the pace line
+        }
+        if let reset = week("claude")?["reset"] as? String, !reset.isEmpty {
+            extras += ["--es", "reset", "'\(reset.uppercased())'"]  // one word for the TV's shell
+        }
+        guard !extras.isEmpty, Date() >= quiet, extras != sent || Date() >= next else { return }
+        busy = true
+        let args = ["-s", device, "shell", "am", "broadcast", "-n", "app.home/.PushReceiver", "-a", "app.home.LIMITS"] + extras
+        DispatchQueue.global(qos: .utility).async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: adb)
+            p.arguments = args
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            var out = Data()
+            if (try? p.run()) != nil {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if p.isRunning { p.terminate() } }
+                out = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+            }
+            let ok = String(decoding: out, as: UTF8.self).contains("Broadcast completed")
+            DispatchQueue.main.async {
+                busy = false
+                if ok {
+                    sent = extras
+                    next = Date() + every
+                    logged = false
+                } else {
+                    quiet = Date() + retry
+                    if !logged { NSLog("ClaudeSpeed: TV limits push to %@ failed", device) }
+                    logged = true
+                }
+            }
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var items: [ProviderItem] = []
     var notch: NotchController?
@@ -2568,6 +2624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     self.notch?.update(doc, alive: alive)
                     for item in self.items { item.update(doc[item.src] as? [String: Any] ?? [:]) }
+                    if !demo { TVLimits.push(doc) }
                 }
                 self.setAnimating(self.anyLive || !(self.notch?.pending.isEmpty ?? self.permissions.items.isEmpty))
                 self.running = false

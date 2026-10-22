@@ -639,7 +639,8 @@ def limit_entry(name, pct, resets_at, now):
         reset = L("%dh %dm", "%dч %dм") % (left // 3600, left % 3600 // 60)
     else:
         reset = L("%dm", "%dм") % max(1, left // 60)
-    return {"name": name, "pct": round(float(pct)), "reset": reset}
+    return {"name": name, "pct": round(float(pct)), "reset": reset, "week": name == L("wk", "нед"),
+            "resets": int(resets_at) if resets_at else None}
 
 
 def window_name(minutes):
